@@ -1,0 +1,32 @@
+[Unit]
+Description=Little Voicemail parent web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=voicemail
+Group=voicemail
+
+WorkingDirectory=/opt/little-voicemail
+ExecStart=/opt/little-voicemail/.venv/bin/python -m src.web.server
+Environment=PYTHONUNBUFFERED=1
+Environment=LV_CONFIG=/etc/little-voicemail/config.json
+Environment=LV_DATA_DIR=/var/lib/little-voicemail
+
+# Binding port 80 for the http->https redirect needs this one capability,
+# and applying an update needs to write into the checkout.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/little-voicemail /etc/little-voicemail /opt/little-voicemail
+
+[Install]
+WantedBy=multi-user.target

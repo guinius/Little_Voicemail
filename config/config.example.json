@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "web": {
+    "password_hash": "",
+    "port": 8443,
+    "hostname": "littlevoicemail"
+  },
+  "signal": {
+    "account": "",
+    "jsonrpc_host": "127.0.0.1",
+    "jsonrpc_port": 7583
+  },
+  "contacts": [
+    { "slot": 1, "name": "", "number": "", "enabled": false },
+    { "slot": 2, "name": "", "number": "", "enabled": false },
+    { "slot": 3, "name": "", "number": "", "enabled": false },
+    { "slot": 4, "name": "", "number": "", "enabled": false },
+    { "slot": 5, "name": "", "number": "", "enabled": false },
+    { "slot": 6, "name": "", "number": "", "enabled": false },
+    { "slot": 7, "name": "", "number": "", "enabled": false },
+    { "slot": 8, "name": "", "number": "", "enabled": false },
+    { "slot": 9, "name": "", "number": "", "enabled": false }
+  ],
+  "audio": {
+    "ringtone": "chime.wav",
+    "input_device": "plughw:CARD=seeed2micvoicec,DEV=0",
+    "output_device": "plughw:CARD=seeed2micvoicec,DEV=0",
+    "playback_gap_seconds": 1.0,
+    "max_record_seconds": 60,
+    "min_record_seconds": 0.7,
+    "ringtone_volume": 0.8
+  },
+  "behaviour": {
+    "selection_timeout_seconds": 30,
+    "require_listen_before_reply": true
+  },
+  "quiet_times": [
+    {
+      "id": "school",
+      "label": "School",
+      "enabled": false,
+      "start": "09:00",
+      "end": "15:15",
+      "days": [0, 1, 2, 3, 4]
+    },
+    {
+      "id": "nap",
+      "label": "Nap",
+      "enabled": false,
+      "start": "13:00",
+      "end": "14:30",
+      "days": [0, 1, 2, 3, 4, 5, 6]
+    },
+    {
+      "id": "bedtime",
+      "label": "Bedtime",
+      "enabled": false,
+      "start": "19:00",
+      "end": "07:00",
+      "days": [0, 1, 2, 3, 4, 5, 6]
+    }
+  ],
+  "updates": {
+    "repo": "guinius/Little_Voicemail",
+    "branch": "master",
+    "check_on_load": true
+  }
+}

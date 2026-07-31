@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Sounds &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<h1>Sounds</h1>
+
+<div class="card">
+  <h2>Ringtone</h2>
+  <p class="hint">
+    Played when a voice message arrives &mdash; unless a quiet time is running.
+    Drop your own <code>.wav</code>, <code>.mp3</code> or <code>.ogg</code> files into
+    the <code>sounds/</code> folder on the device and they will show up here.
+  </p>
+
+  {% if not ringtones %}
+    <div class="banner error">No sound files found in the sounds folder.</div>
+  {% else %}
+    <form method="post">
+      <label for="ringtone">Sound</label>
+      <select id="ringtone" name="ringtone">
+        {% for name in ringtones %}
+          <option value="{{ name }}" {% if name == current %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+
+      <div style="margin-top:1rem">
+        <label for="volume">Volume &mdash; <span id="vol-label">{{ (volume * 100) | round | int }}%</span></label>
+        <input type="range" id="volume" name="volume" min="0" max="1" step="0.05" value="{{ volume }}">
+      </div>
+
+      <div class="actions">
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const slider = document.getElementById('volume');
+  if (slider) {
+    const label = document.getElementById('vol-label');
+    slider.addEventListener('input', () => {
+      label.textContent = Math.round(slider.value * 100) + '%';
+    });
+  }
+</script>
+{% endblock %}

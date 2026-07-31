@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Status &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<h1>Status</h1>
+
+{% if update and update.update_available %}
+<div class="card">
+  <h2>Update available</h2>
+  <p class="hint">
+    Running <strong>{{ update.current_version }}</strong> ({{ update.current_commit }}) &mdash;
+    latest is <strong>{{ update.latest_version }}</strong> ({{ update.latest_commit }}).
+    {% if update.detail %}<br>Latest change: {{ update.detail }}{% endif %}
+  </p>
+  <a class="btn" href="{{ url_for('system') }}">Review and update</a>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Buttons</h2>
+  <p class="hint">
+    A glowing ring here means that contact has messages waiting on the device.
+  </p>
+  <div class="pad">
+    {% for contact in contacts %}
+      {% set waiting = pending.get(contact.slot, 0) %}
+      <div class="key {% if contact.enabled %}set{% endif %} {% if waiting %}waiting{% endif %}">
+        <span class="num">{{ contact.slot }}</span>
+        <span class="who">{{ contact.name or "not set" }}</span>
+        {% if waiting %}<span class="count">{{ waiting }}</span>{% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  <div class="actions">
+    <a class="btn ghost" href="{{ url_for('contacts') }}">Edit contacts</a>
+    <button class="danger" id="reset-all" type="button">Clear all waiting messages</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Device</h2>
+  <dl class="kv">
+    <dt>Phone service</dt>
+    <dd>
+      {% if status.stale %}
+        <span class="badge err">not running</span>
+      {% else %}
+        <span class="badge ok">{{ status.state }}</span>
+      {% endif %}
+    </dd>
+
+    <dt>Signal</dt>
+    <dd>
+      {% if status.get('signal_connected') %}
+        <span class="badge ok">connected</span>
+      {% else %}
+        <span class="badge err">disconnected</span>
+      {% endif %}
+    </dd>
+
+    <dt>Buttons &amp; lights</dt>
+    <dd>
+      {% if status.get('hardware_live') %}
+        <span class="badge ok">detected</span>
+      {% else %}
+        <span class="badge warn">simulated</span>
+      {% endif %}
+    </dd>
+
+    <dt>Quiet time</dt>
+    <dd>
+      {% if quiet_active %}
+        <span class="badge warn">{{ quiet_active.label }} until {{ quiet_active.end.strftime('%H:%M') }}</span>
+      {% else %}
+        <span class="badge">not active</span>
+      {% endif %}
+    </dd>
+
+    <dt>Messages waiting</dt>
+    <dd>{{ pending.values() | sum }}</dd>
+  </dl>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('reset-all').addEventListener('click', async () => {
+    if (!confirm('Clear every waiting message? The lights will go out and the child will not hear them.')) return;
+    const res = await fetch('{{ url_for("reset_queue") }}', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slot: 'all'})
+    });
+    if (res.ok) location.reload();
+    else alert('Could not clear the queue.');
+  });
+</script>
+{% endblock %}

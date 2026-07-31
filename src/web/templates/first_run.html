@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Set up &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<div class="login-wrap">
+  <h1>Little Voicemail</h1>
+  <div class="card">
+    <p class="hint">
+      Choose a password for the parent settings. You will need it every time you
+      open this page, so pick something you will remember but a child will not guess.
+    </p>
+    <form method="post">
+      <label for="password">New password</label>
+      <input type="password" id="password" name="password" autocomplete="new-password"
+             minlength="8" autofocus required>
+
+      <div style="margin-top:.8rem">
+        <label for="confirm">Confirm password</label>
+        <input type="password" id="confirm" name="confirm" autocomplete="new-password"
+               minlength="8" required>
+      </div>
+
+      <button type="submit">Save and continue</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

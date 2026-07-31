@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Quiet times &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<h1>Quiet times</h1>
+
+<div class="card">
+  <p class="hint">
+    While a quiet time is running the device goes to sleep: no ringtone, no lights,
+    and pressing any button just flashes all nine lights three times. Messages that
+    arrive still get saved, and appear on the buttons as soon as the quiet time ends.
+    A window may run past midnight &mdash; bedtime 19:00 to 07:00 works as you would expect.
+  </p>
+
+  <form method="post">
+    {% for window in windows %}
+      <div class="quiet-row">
+        <div class="quiet-head">
+          <input type="checkbox" id="enabled_{{ window.id }}" name="enabled_{{ window.id }}"
+                 {% if window.enabled %}checked{% endif %}>
+          <strong><label for="enabled_{{ window.id }}" style="margin:0;color:var(--text);font-size:1rem;">{{ window.label }}</label></strong>
+          {% if active and active.id == window.id %}
+            <span class="badge warn">active now</span>
+          {% endif %}
+        </div>
+
+        <div class="quiet-times">
+          <div>
+            <label for="start_{{ window.id }}">Starts</label>
+            <input type="time" id="start_{{ window.id }}" name="start_{{ window.id }}"
+                   value="{{ window.start }}" required>
+          </div>
+          <div>
+            <label for="end_{{ window.id }}">Ends</label>
+            <input type="time" id="end_{{ window.id }}" name="end_{{ window.id }}"
+                   value="{{ window.end }}" required>
+          </div>
+        </div>
+
+        <div class="days">
+          {% for index in range(7) %}
+            <label>
+              <input type="checkbox" name="days_{{ window.id }}" value="{{ index }}"
+                     {% if index in window.days %}checked{% endif %}>
+              <span>{{ day_names[index] }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+
+    <div class="actions">
+      <button type="submit">Save quiet times</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

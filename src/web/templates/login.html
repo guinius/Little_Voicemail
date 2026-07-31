@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Sign in &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<div class="login-wrap">
+  <h1>Little Voicemail</h1>
+  <div class="card">
+    <form method="post">
+      <label for="password">Parent password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password"
+             autofocus required>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

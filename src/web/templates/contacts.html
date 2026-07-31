@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Contacts &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<h1>Contacts</h1>
+
+<div class="card">
+  <p class="hint">
+    Each of the nine buttons maps to one Signal contact. Numbers must be in full
+    international form, starting with <code>+</code> &mdash; for example
+    <code>+447700900123</code>. The person must already use Signal on that number.
+    Leave a number blank to make that button do nothing.
+  </p>
+
+  <form method="post">
+    {% for contact in contacts %}
+      <div class="slot-row">
+        <div class="slot-num">{{ contact.slot }}</div>
+        <div>
+          <label for="name_{{ contact.slot }}">Nickname</label>
+          <input type="text" id="name_{{ contact.slot }}" name="name_{{ contact.slot }}"
+                 value="{{ contact.name }}" maxlength="24" placeholder="Grandma">
+        </div>
+        <div>
+          <label for="number_{{ contact.slot }}">Signal number</label>
+          <input type="tel" id="number_{{ contact.slot }}" name="number_{{ contact.slot }}"
+                 value="{{ contact.number }}" placeholder="+447700900123"
+                 pattern="\+[1-9][0-9]{6,14}">
+        </div>
+        <div class="toggle">
+          <input type="checkbox" id="enabled_{{ contact.slot }}" name="enabled_{{ contact.slot }}"
+                 {% if contact.enabled %}checked{% endif %}>
+          <label for="enabled_{{ contact.slot }}">On</label>
+        </div>
+      </div>
+    {% endfor %}
+
+    <div class="actions">
+      <button type="submit">Save contacts</button>
+      <button type="button" class="ghost" id="import-names">Get nicknames from Signal</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Waiting messages</h2>
+  <p class="hint">Clear a contact's queue if a message is stuck or no longer wanted.</p>
+  <table>
+    <tr><th>Button</th><th>Contact</th><th>Waiting</th><th></th></tr>
+    {% for contact in contacts %}
+      <tr>
+        <td>{{ contact.slot }}</td>
+        <td>{{ contact.name or "&mdash;" | safe }}</td>
+        <td>{{ pending.get(contact.slot, 0) }}</td>
+        <td>
+          {% if pending.get(contact.slot, 0) %}
+            <button type="button" class="danger reset-slot" data-slot="{{ contact.slot }}">Clear</button>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.querySelectorAll('.reset-slot').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const res = await fetch('{{ url_for("reset_queue") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({slot: btn.dataset.slot})
+      });
+      if (res.ok) location.reload();
+    });
+  });
+
+  document.getElementById('import-names').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Asking Signal...';
+    try {
+      const res = await fetch('{{ url_for("api_contacts_import") }}', {method: 'POST'});
+      const body = await res.json();
+      if (!res.ok) {
+        alert('Could not reach Signal: ' + (body.error || 'unknown error'));
+      } else if (!body.updated.length) {
+        alert('No new nicknames found. Save the numbers first, and make sure they are in your Signal contacts.');
+      } else {
+        location.reload();
+        return;
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Get nicknames from Signal';
+    }
+  });
+</script>
+{% endblock %}

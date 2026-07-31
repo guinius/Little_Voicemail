@@ -1,0 +1,31 @@
+[Unit]
+Description=Little Voicemail phone service (buttons, lights, audio)
+After=signal-cli.service sound.target
+Wants=signal-cli.service
+
+[Service]
+Type=simple
+User=voicemail
+Group=voicemail
+
+# audio for ALSA, i2c for the button and LED expanders, gpio for the HAT.
+SupplementaryGroups=audio i2c gpio
+
+WorkingDirectory=/opt/little-voicemail
+ExecStart=/opt/little-voicemail/.venv/bin/python -m src.main
+Environment=PYTHONUNBUFFERED=1
+Environment=LV_CONFIG=/etc/little-voicemail/config.json
+Environment=LV_DATA_DIR=/var/lib/little-voicemail
+Environment=LV_SIGNAL_CONFIG=/var/lib/little-voicemail/signal-cli
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/little-voicemail /etc/little-voicemail
+
+[Install]
+WantedBy=multi-user.target

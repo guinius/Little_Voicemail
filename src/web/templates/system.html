@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}System &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<h1>System</h1>
+
+<div class="card">
+  <h2>Software</h2>
+  <dl class="kv">
+    <dt>Running</dt>
+    <dd>{{ update.current_version }} {% if update.current_commit %}({{ update.current_commit }}){% endif %}</dd>
+    <dt>Latest on GitHub</dt>
+    <dd>
+      {% if update.error %}
+        <span class="badge err">unavailable</span>
+      {% else %}
+        {{ update.latest_version }} {% if update.latest_commit %}({{ update.latest_commit }}){% endif %}
+      {% endif %}
+    </dd>
+    <dt>Signal account</dt>
+    <dd>{{ account or "not linked" }}</dd>
+  </dl>
+
+  {% if update.error %}
+    <div class="banner error" style="margin-top:1rem">{{ update.error }}</div>
+  {% elif update.update_available %}
+    <div class="banner quiet" style="margin-top:1rem">
+      A newer version is available.
+      {% if update.detail %}<br>Latest change: {{ update.detail }}{% endif %}
+    </div>
+  {% else %}
+    <div class="banner success" style="margin-top:1rem">This device is up to date.</div>
+  {% endif %}
+
+  <div class="actions">
+    <button type="button" id="update-now" {% if not update.update_available %}disabled{% endif %}>
+      Update and restart
+    </button>
+    <a class="btn ghost" href="{{ url_for('system', recheck=1) }}">Check again</a>
+  </div>
+
+  <pre class="log" id="update-log" hidden></pre>
+</div>
+
+<div class="card">
+  <h2>Device</h2>
+  <dl class="kv">
+    <dt>Phone service</dt>
+    <dd>{% if status.stale %}<span class="badge err">not running</span>{% else %}<span class="badge ok">{{ status.state }}</span>{% endif %}</dd>
+    <dt>Signal link</dt>
+    <dd>{% if status.get('signal_connected') %}<span class="badge ok">connected</span>{% else %}<span class="badge err">disconnected</span>{% endif %}</dd>
+    <dt>Buttons &amp; lights</dt>
+    <dd>{% if status.get('hardware_live') %}<span class="badge ok">detected</span>{% else %}<span class="badge warn">simulated</span>{% endif %}</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2>Recent messages</h2>
+  {% if not recent %}
+    <p class="hint">Nothing received yet.</p>
+  {% else %}
+    <table>
+      <tr><th>Button</th><th>From</th><th>Status</th></tr>
+      {% for row in recent %}
+        <tr>
+          <td>{{ row['slot'] }}</td>
+          <td>{{ row['sender'] }}</td>
+          <td>
+            {% if not row['cleared_at'] %}
+              <span class="badge warn">waiting</span>
+            {% elif row['cleared_reason'] == 'played' %}
+              <span class="badge ok">heard here</span>
+            {% elif row['cleared_reason'] == 'read_elsewhere' %}
+              <span class="badge ok">read on another device</span>
+            {% else %}
+              <span class="badge">cleared</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const btn = document.getElementById('update-now');
+  const logBox = document.getElementById('update-log');
+
+  async function pollProgress() {
+    const res = await fetch('{{ url_for("api_update_progress") }}');
+    if (!res.ok) return;
+    const p = await res.json();
+    logBox.hidden = false;
+    logBox.textContent = [p.message, ...(p.log || [])].filter(Boolean).join('\n');
+    if (p.running) {
+      setTimeout(pollProgress, 1500);
+    } else if (p.finished && p.ok) {
+      logBox.textContent += '\n\nThe device is restarting. This page will not respond ' +
+        'for a minute or two — reload it once the lights come back.';
+    } else if (p.finished) {
+      btn.disabled = false;
+      btn.textContent = 'Update and restart';
+    }
+  }
+
+  btn.addEventListener('click', async () => {
+    if (!confirm('Update the software and restart the device? It will be unavailable for a couple of minutes.')) return;
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+    const res = await fetch('{{ url_for("api_update_start") }}', {method: 'POST'});
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      alert('Could not start the update: ' + (body.error || res.statusText));
+      btn.disabled = false;
+      btn.textContent = 'Update and restart';
+      return;
+    }
+    pollProgress();
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Little Voicemail{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128222;</text></svg>">
+</head>
+<body>
+{% if session.get('authenticated') %}
+<nav class="nav">
+  <a class="brand" href="{{ url_for('index') }}">Little&nbsp;Voicemail</a>
+  <div class="nav-links">
+    <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>Status</a>
+    <a href="{{ url_for('contacts') }}" {% if request.endpoint == 'contacts' %}class="active"{% endif %}>Contacts</a>
+    <a href="{{ url_for('sounds') }}" {% if request.endpoint == 'sounds' %}class="active"{% endif %}>Sounds</a>
+    <a href="{{ url_for('quiet_times') }}" {% if request.endpoint == 'quiet_times' %}class="active"{% endif %}>Quiet&nbsp;times</a>
+    <a href="{{ url_for('system') }}" {% if request.endpoint == 'system' %}class="active"{% endif %}>System</a>
+    <a href="{{ url_for('logout') }}" class="muted">Log out</a>
+  </div>
+</nav>
+{% endif %}
+
+<main class="wrap">
+  {% if quiet_now %}
+    <div class="banner quiet">Quiet time is active &mdash; the device is asleep.</div>
+  {% endif %}
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="banner {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="foot">Little Voicemail v{{ app_version }}</footer>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,31 @@
+# Anything with real phone numbers, credentials or Signal session state
+# must never reach the repository.
+var/
+config/config.json
+*.env
+signal.env
+*.key
+*.crt
+session.key
+
+# Runtime state
+*.db
+*.db-wal
+*.db-shm
+status.json
+recordings/
+attachments/
+signal-cli/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp

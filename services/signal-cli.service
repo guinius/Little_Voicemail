@@ -1,0 +1,36 @@
+[Unit]
+Description=signal-cli JSON-RPC daemon for Little Voicemail
+Documentation=https://github.com/AsamK/signal-cli/wiki/JSON-RPC-service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=voicemail
+Group=voicemail
+
+# Attachments are written here and read back by the phone service, so both
+# run as the same user.
+Environment=SIGNAL_CLI_CONFIG=/var/lib/little-voicemail/signal-cli
+
+ExecStart=/usr/local/bin/signal-cli \
+    --config /var/lib/little-voicemail/signal-cli \
+    -a ${SIGNAL_ACCOUNT} \
+    daemon --tcp 127.0.0.1:7583 --receive-mode on-start
+EnvironmentFile=/etc/little-voicemail/signal.env
+
+Restart=always
+RestartSec=10
+
+# The daemon only ever talks to Signal's servers and the local socket.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/little-voicemail
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
