@@ -1,8 +1,12 @@
 """Minimal MCP23017 I2C GPIO expander driver.
 
-The ReSpeaker HAT occupies the Pi's I2S and several GPIO pins, and ten
-illuminated buttons need twenty lines in total, so buttons and LEDs both
-live on MCP23017 expanders:
+Ten illuminated buttons need twenty lines in total, so buttons and LEDs
+both live on MCP23017 expanders rather than on the Pi's own GPIO. The
+expanders are effectively free: the ReSpeaker HAT already occupies I2C for
+codec control, so hanging them off SDA/SCL costs no additional pins. Going
+direct to GPIO would spend all twenty remaining lines and still need driver
+arrays, because the Pi's total GPIO budget (~50 mA) is well below what ten
+lamps draw. See HARDWARE.md for the full reasoning.
 
     Expander A (0x20)  ten inputs  - buttons, pulled up, interrupt on change
     Expander B (0x21)  ten outputs - LEDs, driven through ULN2803 arrays

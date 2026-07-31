@@ -10,13 +10,80 @@ something to their face. That rules out the USB handset from the Kids-Phone
 project and points at a mic array.
 
 **Twenty GPIO lines.** Nine illuminated buttons plus push-to-talk is ten
-switches and ten lamps. The Pi has 26 usable GPIO pins, but the audio HAT
-takes the I²S pins (18–21), both I²C pins, and a few more. There are not
-twenty left. On top of that, ten arcade-button LEDs at ~20 mA each is 200 mA,
-which exceeds the MCP23017's own 150 mA package limit — so the lamps need
-driver arrays, not just expander pins.
+switches and ten lamps. Twenty lines is more than the Pi can spare once the
+audio HAT has taken its share, and ten arcade-button LEDs at ~20 mA each is
+200 mA, which no GPIO source on the board can supply. Both problems are
+solved off-board.
 
 Hence: audio on a HAT, buttons and lamps on I²C expanders behind ULN2803s.
+The next section works through why, because "just use the Pi's own pins" is
+the obvious question and the answer is not obvious.
+
+## Why the MCP23017s stay
+
+The expanders look like the easiest parts to design out. They are not, and
+the reasoning is worth writing down so it does not get relitigated.
+
+### They cost zero GPIO pins
+
+This is the part that settles it. Both expanders hang off SDA/SCL — and the
+ReSpeaker HAT **already occupies I²C** for codec control. That bus is spent
+whether or not the expanders are on it.
+
+So removing them frees nothing. It takes twenty lines that currently cost no
+pin budget at all and moves them onto twenty pins you would otherwise still
+have.
+
+### The twenty pins do exist, but only just
+
+For the record, because the naive count is misleading in the other direction:
+the Pi has 26 usable GPIO (BCM 2–27; 0 and 1 are the HAT ID EEPROM). The
+HAT's unavoidable claim is only six of them — I²C (2, 3) and I²S (18–21).
+That leaves:
+
+```
+4 5 6 7 8 9 10 11 12 13 14 15 16 17 22 23 24 25 26 27
+└────────────────── exactly 20 ──────────────────────┘
+```
+
+Exactly twenty, with nothing to spare. Taking them means giving up:
+
+| Pins | What goes |
+|------|-----------|
+| 7–11 | **SPI0**, and with it the HAT's three onboard APA102 RGB LEDs |
+| 14, 15 | **The UART serial console** — the recovery path on a headless box when the network is what is broken |
+| 12, 13 | The Grove port, and the only two hardware-PWM pins, burned on on/off lamps |
+| 17 | Conflicts with the HAT's own user button, which is physically wired to this pin |
+
+Plus no margin whatsoever: not one spare pin for a status LED, a volume
+knob, or anything thought of later. And GPIO 9–27 default to pull-down at
+boot while 0–8 pull up, with pins reassigned to ALT functions partway
+through startup — so lamps wired straight to GPIO flicker semi-randomly for
+the twenty seconds the Pi takes to boot.
+
+### The Pi cannot drive the lamps anyway
+
+The decisive one. Raspberry Pi GPIO is rated **16 mA per pin and roughly
+50 mA total across all pins**. The MCP23017's 150 mA package limit is three
+times more generous than the Pi's whole-chip budget.
+
+Ten lamps at even 9 mA is 90 mA — comfortable on an expander, well over the
+limit direct from the Pi. Going direct to GPIO therefore still needs driver
+arrays, so the ULN2803s come back and the only thing achieved is spending
+every remaining pin.
+
+### Summary
+
+| Approach | Chips | Extra Pi pins | Lamp current | Spare GPIO |
+|----------|------:|--------------:|--------------|-----------:|
+| **MCP23017 + ULN2803** (this design) | 4 | **0** | 200 mA through the ULN2803s ✅ | ~12 |
+| Direct to GPIO | 2 (drivers still needed) | **20** | 90 mA against a ~50 mA budget ❌ | **0** |
+
+Smaller buttons do not change this. A 16 mm illuminated pushbutton is still
+one switch and one lamp — two lines, exactly like a 30 mm arcade button. Body
+diameter has nothing to do with the pin count. What smaller bare-LED buttons
+*can* change is the current, since they ship without a built-in resistor and
+let you choose it; see [Substitutions](#substitutions-worth-knowing-about).
 
 ## Choosing a board
 
@@ -118,6 +185,24 @@ produce, so it is not the recommended path.
   `output_device` in the config to the USB card and skip the HAT entirely.
 - **Cheap USB mic + powered speaker** (~£10) — works, but the pickup is poor
   enough that a child has to lean in, which defeats the point.
+- **16 mm illuminated pushbuttons** (~£1.50 each) — these ship with a *bare*
+  LED and no built-in resistor, so you pick the current with a series resistor
+  (220 Ω–1 kΩ). At ~9 mA each, ten lamps draw 91 mA, which fits inside the
+  MCP23017's 150 mA package limit — so **the ULN2803s could be dropped** and
+  the lamps driven straight off expander #2.
+
+  Two catches. Wire them as active-low sinks (anode → +5 V through the
+  resistor, cathode → expander pin, drive **low** to light). Sourcing from the
+  expander does not work: it runs at 3.3 V and sags to ~2.7 V under load,
+  while white and blue LEDs need ~3.0 V. Sinking from the 5 V rail gives
+  proper headroom for any colour. This also inverts the LED word, so
+  `leds.py` and `configure_outputs()` would need to change with it.
+
+  The bigger objection is ergonomic: a 16 mm button has a ~12 mm cap, which
+  is a fingertip-sized target for a four-year-old and leaves the 45 mm grid
+  mostly empty panel. If you want smaller than 30 mm, 24 mm is the sensible
+  floor — and keep the 60 mm push-to-talk whatever you do, since the design
+  leans on it being unmistakable by feel.
 
 ## Wiring
 
@@ -160,9 +245,14 @@ cathodes. LED anodes all go to **+5 V**.
 ```
   MCP23017 #2 pin ──► ULN2803 IN(n)      ULN2803 OUT(n) ──► LED cathode
                                                  LED anode ──► +5V
-  ULN2803 pin 9 (COM) ──► +5V
-  ULN2803 pin 10 (GND) ──► GND
+  ULN2803 pin 9  (GND) ──► GND
+  ULN2803 pin 10 (COM) ──► +5V, or leave unconnected
 ```
+
+> **Pin 9 is GND and pin 10 is COM**, not the other way round. Swapping them
+> puts +5 V on the ground pin and ties the flyback-diode common to 0 V, which
+> will not work and will most likely destroy the chip. COM only matters for
+> inductive loads; with LEDs it can simply be left floating.
 
 | Lamp | Expander pin | ULN2803 |
 |------|--------------|---------|

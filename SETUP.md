@@ -190,7 +190,8 @@ If only one address appears, check the address-select pins on the missing chip.
 The `RESET` pin (18) on one or both MCP23017s is floating. Tie it to 3V3.
 
 **Lamps dim when several are lit**
-Power. Use the official 3 A supply, and check the ULN2803 COM pin is on +5 V.
+Power. Use the official 3 A supply, and check the ULN2803 COM pin (**pin 10**,
+not pin 9 — pin 9 is GND) is on +5 V.
 
 **"signal-cli is not installed" or voice notes arrive as file attachments**
 You are on a signal-cli older than 0.14.2, before `--voice-note` existed.

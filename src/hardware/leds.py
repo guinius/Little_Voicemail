@@ -1,9 +1,15 @@
 """LED output.
 
 Ten LEDs on a second MCP23017, driven through ULN2803 arrays because ten
-arcade-button LEDs at ~20 mA each would exceed the expander's own package
-current limit. Bit mapping matches the buttons: bits 0-8 are contacts 1-9,
-bit 9 is the push-to-talk lamp.
+arcade-button LEDs at ~20 mA each is 200 mA, over the expander's own 150 mA
+package limit (and far over the Pi's ~50 mA whole-chip GPIO budget). Bit
+mapping matches the buttons: bits 0-8 are contacts 1-9, bit 9 is the
+push-to-talk lamp.
+
+A set bit lights its lamp: the expander drives the ULN2803 input high, which
+sinks the LED cathode. Swapping to bare-LED buttons driven straight off the
+expander would invert that, and configure_outputs() would have to idle high
+rather than low - see the substitutions note in HARDWARE.md.
 
 The MCP23017 has no PWM, so patterns are strictly on/off. A render loop
 ticks at 25 Hz and writes the whole 16-bit word in one I2C transaction, so
