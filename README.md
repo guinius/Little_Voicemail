@@ -64,7 +64,9 @@ below is built on [signal-cli](https://github.com/AsamK/signal-cli).
 Roughly **£70–95** all in. See [HARDWARE.md](HARDWARE.md) for the full bill of
 materials and part links.
 
-- Raspberry Pi 4 (2 GB) or Pi Zero 2 W
+- Raspberry Pi 4 (2 GB), or a **Pi Zero 2 W** for the cheapest build that works
+  — signal-cli needs Linux and a modern JVM, which rules out the Pico 2 W and
+  the ARMv6 Pi Zero v1.3 (see [HARDWARE.md](HARDWARE.md#choosing-a-board))
 - ReSpeaker 2-Mics Pi HAT v2 — dual far-field mics, onboard amp
 - 3 W 4 Ω speaker
 - 9 × 30 mm illuminated arcade buttons + 1 × 60 mm for push-to-talk

@@ -18,6 +18,68 @@ driver arrays, not just expander pins.
 
 Hence: audio on a HAT, buttons and lamps on I²C expanders behind ULN2803s.
 
+## Choosing a board
+
+The messaging stack sets a hard floor here. signal-cli is a Java application,
+and the Signal protocol implementation it depends on (libsignal) is not
+something that can be reimplemented casually. That means the board must run
+Linux **and** a modern JVM.
+
+| Board | £ | Verdict |
+|-------|--:|---------|
+| **Pi Zero 2 W** | ~15 | ✅ **Cheapest that works.** Quad-core ARMv8, WiFi built in. 512 MB RAM is tight for a JVM — see below |
+| Pi 4 / Pi 5 (2 GB+) | 45+ | ✅ Comfortable. What the default config assumes |
+| Pi 3A+ | ~23 | ✅ Works. 512 MB, same RAM caveat as the Zero 2 W |
+| **Pi Zero v1.3** | ~5 | ❌ **No.** Two independent blockers |
+| **Pico 2 W** | ~7 | ❌ **No.** Not a Linux computer at all |
+
+### Why not the Pi Zero v1.3
+
+Two separate problems, either one fatal:
+
+1. **It has no WiFi.** The v1.3 is the pre-wireless Zero — WiFi arrived with
+   the Zero **W** in 2017. You would need a USB dongle plus an OTG adapter,
+   which puts you back at Zero 2 W money in a bulkier package.
+2. **ARMv6 cannot run signal-cli.** OpenJDK's Server VM requires ARMv7 with
+   hardware floating point; on a Pi 1 or original Zero it refuses to start
+   with *"Server VM is only supported on ARMv7+ VFP"*. signal-cli's maintainer
+   has confirmed this is a JVM limitation with no practical workaround.
+
+### Why not the Pico 2 W
+
+The Pico 2 W is a **microcontroller**, not a small computer. It has 520 KB of
+SRAM and 4 MB of flash, and runs MicroPython or bare C — there is no Linux, no
+JVM, no filesystem worth the name. For this project that rules out signal-cli,
+the Flask web UI, Opus encoding, TLS, and storing voice messages (4 MB of
+flash holds roughly one minute of audio in total).
+
+It would be a fine **I/O co-processor** — scanning buttons and driving lamps
+over serial while a Pi does the real work — but that is strictly more parts and
+more complexity than two £3 MCP23017s, for no benefit.
+
+### Making 512 MB work (Zero 2 W / Pi 3A+)
+
+The JVM is the memory hog. Three changes make it comfortable:
+
+```bash
+# Give the GPU the bare minimum
+echo 'gpu_mem=16' | sudo tee -a /boot/firmware/config.txt
+
+# Cap signal-cli's heap - add to /etc/little-voicemail/signal.env
+echo 'JAVA_OPTS=-Xmx192m -XX:+UseSerialGC' | sudo tee -a /etc/little-voicemail/signal.env
+
+# Compressed RAM swap, much kinder to the SD card than a swapfile
+sudo apt install -y zram-tools
+echo 'ALGO=zstd\nPERCENT=60' | sudo tee -a /etc/default/zramswap
+sudo systemctl restart zramswap
+```
+
+Use a Pi Zero 2 W rather than a Pi 4 only if the cost matters to you; expect
+sends to take a second or two longer while Opus encoding runs on the slower
+core. There is also an experimental GraalVM native build of signal-cli that
+drops the JVM entirely, but ARM64 native-image builds are slow and finicky to
+produce, so it is not the recommended path.
+
 ## Bill of materials
 
 | Qty | Part | Approx. £ | Notes |
