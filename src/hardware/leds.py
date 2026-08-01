@@ -1,15 +1,20 @@
 """LED output.
 
-Ten LEDs on a second MCP23017, driven through ULN2803 arrays because ten
-arcade-button LEDs at ~20 mA each is 200 mA, over the expander's own 150 mA
-package limit (and far over the Pi's ~50 mA whole-chip GPIO budget). Bit
-mapping matches the buttons: bits 0-8 are contacts 1-9, bit 9 is the
-push-to-talk lamp.
+Seven lamps on port B of the same MCP23017 that reads the buttons: GPB0-GPB5
+are contacts 1-6 and GPB6 is the push-to-talk lamp. Bit positions are offset
+by PORT_B so the whole thing still fits one 16-bit register pair.
 
-A set bit lights its lamp: the expander drives the ULN2803 input high, which
-sinks the LED cathode. Swapping to bare-LED buttons driven straight off the
-expander would invert that, and configure_outputs() would have to idle high
-rather than low - see the substitutions note in HARDWARE.md.
+The lamps are wired as sinks - anode to +5V through a series resistor,
+cathode to the expander pin - so a LOW pin lights the lamp and the pins idle
+HIGH. Everything above _write() works in positive logic (a set bit means
+lit); _write() is the single place that inverts.
+
+Sinking rather than sourcing is deliberate. The expander runs at 3.3V and
+its output high sags under load, which is not enough headroom for a white or
+blue LED at ~3.0V forward. Pulling the cathode down against a 5V rail works
+for any colour. At ~9-13 mA per lamp depending on colour, seven lamps stay
+inside the expander's 150 mA package limit with room to spare, so no
+Darlington array is needed.
 
 The MCP23017 has no PWM, so patterns are strictly on/off. A render loop
 ticks at 25 Hz and writes the whole 16-bit word in one I2C transaction, so
@@ -23,16 +28,18 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from ..config import NUM_CONTACTS
 from .buttons import PTT
 from .mcp23017 import MCP23017
 
 log = logging.getLogger(__name__)
 
 RENDER_INTERVAL = 0.04
-CONTACT_BITS = {slot: slot - 1 for slot in range(1, 10)}
-PTT_BIT = 9
-LED_MASK = 0x03FF
-ALL_CONTACTS = tuple(range(1, 10))
+PORT_B = 8  # bit offset of GPB0 within the 16-bit register pair
+CONTACT_BITS = {slot: PORT_B + slot - 1 for slot in range(1, NUM_CONTACTS + 1)}
+PTT_BIT = PORT_B + NUM_CONTACTS
+LED_MASK = ((1 << (NUM_CONTACTS + 1)) - 1) << PORT_B
+ALL_CONTACTS = tuple(range(1, NUM_CONTACTS + 1))
 
 
 @dataclass
@@ -78,7 +85,8 @@ class LedController:
 
     def start(self) -> None:
         if self._expander is not None:
-            self._expander.configure_outputs(LED_MASK)
+            # Lamps are active low, so the pins idle high (all dark).
+            self._expander.configure_outputs(LED_MASK, initial=LED_MASK)
         self._task = asyncio.create_task(self._run(), name="led-render")
 
     async def stop(self) -> None:
@@ -90,6 +98,9 @@ class LedController:
                 pass
             self._task = None
         self.all_off()
+        # Force the write through: the cache may already read 0 if the render
+        # loop never ran, and shutdown must actually drive the lamps dark.
+        self._last_word = -1
         self._write(0x0000)
 
     # -- pattern control -------------------------------------------------
@@ -114,7 +125,7 @@ class LedController:
         pending: dict[int, int],
         muted: bool = False,
     ) -> None:
-        """Set all nine contact lamps from the app's current state.
+        """Set all six contact lamps from the app's current state.
 
         Selected wins over pending: while a contact is chosen its lamp is
         steady, even if that same contact also has unheard messages. During
@@ -198,7 +209,10 @@ class LedController:
         self._last_word = word
         if self._live and self._expander is not None:
             try:
-                self._expander.write_gpio(word)
+                # Invert: the lamps sink, so a lit lamp is a LOW pin. Port A
+                # is all inputs, so zeroing its latch bits here has no effect
+                # on the pins and keeps this to one I2C transaction.
+                self._expander.write_gpio(~word & LED_MASK)
             except OSError:
                 log.exception("I2C write to LED expander failed")
 

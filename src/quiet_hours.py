@@ -2,7 +2,7 @@
 
 Up to three independently toggleable windows (school, nap, bedtime). While
 any enabled window is active the device is inert: no ringtone, no LEDs, and
-any button press just flashes all nine lights three times.
+any button press just flashes all six lights three times.
 
 Windows may wrap past midnight ("19:00" -> "07:00"), which is the normal
 case for bedtime, so containment is tested on the wrapped interval rather

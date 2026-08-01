@@ -11,7 +11,7 @@ Behaviour, in the order a child experiences it:
   * Let go. The clip is encoded and sent as a Signal voice note.
   * A message arriving plays the chosen ringtone and sets that contact's
     lamp flashing until it is heard - here or on a parent's own phone.
-  * During quiet time none of that happens. Any press flashes all nine
+  * During quiet time none of that happens. Any press flashes all six
     lamps three times and is otherwise ignored; messages still arrive and
     queue up silently, appearing on the buttons once quiet time ends.
 """

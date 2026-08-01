@@ -9,81 +9,87 @@ they can talk at it from wherever they are standing rather than holding
 something to their face. That rules out the USB handset from the Kids-Phone
 project and points at a mic array.
 
-**Twenty GPIO lines.** Nine illuminated buttons plus push-to-talk is ten
-switches and ten lamps. Twenty lines is more than the Pi can spare once the
-audio HAT has taken its share, and ten arcade-button LEDs at ~20 mA each is
-200 mA, which no GPIO source on the board can supply. Both problems are
-solved off-board.
+**Fourteen GPIO lines.** Six illuminated buttons plus push-to-talk is seven
+switches and seven lamps. Fourteen lines is more than the Pi can spare
+alongside the audio HAT once you want to keep a serial console, and seven
+lamps draw more current than the Pi's GPIO is allowed to supply. Both
+problems are solved by one expander.
 
-Hence: audio on a HAT, buttons and lamps on I²C expanders behind ULN2803s.
-The next section works through why, because "just use the Pi's own pins" is
-the obvious question and the answer is not obvious.
+Hence: audio on a HAT, buttons and lamps on a single I2C expander. The next
+section works through why, because "just use the Pi's own pins" is the
+obvious question and at seven buttons the answer is genuinely close.
 
-## Why the MCP23017s stay
+## Why the MCP23017 stays
 
-The expanders look like the easiest parts to design out. They are not, and
-the reasoning is worth writing down so it does not get relitigated.
+At ten buttons the expanders were unarguable — twenty lines simply did not
+exist. At seven the pin count alone no longer settles it, so the reasoning is
+worth writing down.
 
-### They cost zero GPIO pins
+### It costs zero GPIO pins
 
-This is the part that settles it. Both expanders hang off SDA/SCL — and the
-ReSpeaker HAT **already occupies I²C** for codec control. That bus is spent
-whether or not the expanders are on it.
+This is the part that settles it. The expander hangs off SDA/SCL — and the
+ReSpeaker HAT **already occupies I2C** for codec control. That bus is spent
+whether or not the expander is on it.
 
-So removing them frees nothing. It takes twenty lines that currently cost no
-pin budget at all and moves them onto twenty pins you would otherwise still
+So removing it frees nothing. It takes fourteen lines that currently cost no
+pin budget at all and moves them onto fourteen pins you would otherwise still
 have.
 
-### The twenty pins do exist, but only just
+### The fourteen pins do exist
 
-For the record, because the naive count is misleading in the other direction:
-the Pi has 26 usable GPIO (BCM 2–27; 0 and 1 are the HAT ID EEPROM). The
-HAT's unavoidable claim is only six of them — I²C (2, 3) and I²S (18–21).
-That leaves:
+Unlike at ten buttons, they genuinely fit. The Pi has 26 usable GPIO
+(BCM 2-27; 0 and 1 are the HAT ID EEPROM), and the HAT's unavoidable claim is
+only six of them — I2C (2, 3) and I2S (18-21). That leaves exactly twenty:
 
 ```
 4 5 6 7 8 9 10 11 12 13 14 15 16 17 22 23 24 25 26 27
-└────────────────── exactly 20 ──────────────────────┘
 ```
 
-Exactly twenty, with nothing to spare. Taking them means giving up:
+Fourteen of twenty, with six spare. You would have to spend SPI0 (7-11),
+which costs the HAT's three onboard RGB LEDs, but you could keep the UART
+console on 14/15 and stay clear of GPIO 17, which the HAT's own user button
+is wired to.
 
-| Pins | What goes |
-|------|-----------|
-| 7–11 | **SPI0**, and with it the HAT's three onboard APA102 RGB LEDs |
-| 14, 15 | **The UART serial console** — the recovery path on a headless box when the network is what is broken |
-| 12, 13 | The Grove port, and the only two hardware-PWM pins, burned on on/off lamps |
-| 17 | Conflicts with the HAT's own user button, which is physically wired to this pin |
+So the pin-count objection is real but no longer decisive. What decides it is
+the next section.
 
-Plus no margin whatsoever: not one spare pin for a status LED, a volume
-knob, or anything thought of later. And GPIO 9–27 default to pull-down at
-boot while 0–8 pull up, with pins reassigned to ALT functions partway
-through startup — so lamps wired straight to GPIO flicker semi-randomly for
-the twenty seconds the Pi takes to boot.
+### The Pi cannot drive the lamps
 
-### The Pi cannot drive the lamps anyway
+Raspberry Pi GPIO is rated **16 mA per pin and roughly 50 mA total across all
+pins**. The MCP23017's 150 mA package limit is three times more generous than
+the Pi's whole-chip budget.
 
-The decisive one. Raspberry Pi GPIO is rated **16 mA per pin and roughly
-50 mA total across all pins**. The MCP23017's 150 mA package limit is three
-times more generous than the Pi's whole-chip budget.
+| Lamps | Each | Seven total | vs the Pi's ~50 mA |
+|-------|-----:|------------:|--------------------|
+| 30 mm arcade, resistor built in | 20 mA | 140 mA | nearly 3x over |
+| Bare LED, 220 ohm from 5 V | 9-13 mA | 63-91 mA | still over |
+| Bare LED, ~470 ohm from 5 V | 5 mA | 35 mA | fits, but that is 70% of the entire budget |
 
-Ten lamps at even 9 mA is 90 mA — comfortable on an expander, well over the
-limit direct from the Pi. Going direct to GPIO therefore still needs driver
-arrays, so the ULN2803s come back and the only thing achieved is spending
-every remaining pin.
+Only the dimmest option fits, and it commits most of the Pi's GPIO allowance
+to LEDs. On the expander the same lamps draw 63-91 mA against 150 mA, with
+per-pin current an order of magnitude inside the 25 mA pin limit.
+
+There is a second, smaller reason. GPIO 9-27 default to pull-down at boot
+while 0-8 pull up, and pins get reassigned to ALT functions partway through
+startup — so lamps wired straight to Pi GPIO flicker semi-randomly for the
+twenty seconds the Pi takes to boot. The expander's outputs are high-Z at
+reset and defined the moment the driver configures them, so the panel stays
+dark until the app says otherwise. On a device that sits in a child's bedroom
+that is worth something.
 
 ### Summary
 
-| Approach | Chips | Extra Pi pins | Lamp current | Spare GPIO |
-|----------|------:|--------------:|--------------|-----------:|
-| **MCP23017 + ULN2803** (this design) | 4 | **0** | 200 mA through the ULN2803s ✅ | ~12 |
-| Direct to GPIO | 2 (drivers still needed) | **20** | 90 mA against a ~50 mA budget ❌ | **0** |
+| Approach | Chips | Pi pins spent | Lamp current | Boot flicker | Spare GPIO |
+|----------|------:|--------------:|--------------|--------------|-----------:|
+| **One MCP23017** (this design) | **1** | **0** | 63-91 mA of 150 mA | no | **20** |
+| Direct to GPIO | 0 | 14 | 35 mA of ~50 mA, and dim | yes | 6 |
 
-Smaller buttons do not change this. A 16 mm illuminated pushbutton is still
-one switch and one lamp — two lines, exactly like a 30 mm arcade button. Body
-diameter has nothing to do with the pin count. What smaller bare-LED buttons
-*can* change is the current, since they ship without a built-in resistor and
-let you choose it; see [Substitutions](#substitutions-worth-knowing-about).
+One chip, zero pins and full brightness beats zero chips, fourteen pins and
+dim lamps. The expander is a DIP-28, a decoupling cap and a link to 3V3 — it
+is not the complicated part of this build.
+
+Note what dropping from ten buttons to seven *did* buy: the second expander
+and both ULN2803 driver arrays are gone. Four chips became one.
 
 ## Choosing a board
 
@@ -156,23 +162,26 @@ produce, so it is not the recommended path.
 | 1 | Official Pi USB-C PSU, 3 A | 8 | Do not skimp — the amp draws real current |
 | 1 | **ReSpeaker 2-Mics Pi HAT v2** | 12 | Dual far-field mics, TLV320AIC3104 codec, 1 W class-D amp, JST speaker out |
 | 1 | 3 W 4 Ω speaker, 40–50 mm | 4 | JST-PH 2.0 or solder to the pads |
-| 9 | 30 mm illuminated arcade button, 5 V LED | 18 | Generic Sanwa-style. Get the 5 V versions, not 12 V |
-| 1 | 60 mm illuminated arcade button, 5 V LED | 5 | The push-to-talk button — make it obviously the big one |
-| 2 | MCP23017 I²C GPIO expander, DIP-28 | 6 | One for switches, one for lamps |
-| 2 | ULN2803A Darlington array, DIP-18 | 3 | Sinks the LED current the expander cannot |
-| 1 | Perfboard or small protoboard | 4 | |
+| 6 | 30 mm illuminated button, **bare LED** | 12 | Contact buttons. Bare-LED type, not a pre-wired 5 V module — see below |
+| 1 | 60 mm illuminated button, **bare LED** | 5 | The push-to-talk button — make it obviously the big one |
+| 1 | MCP23017 I²C GPIO expander, DIP-28 | 3 | Port A reads the switches, port B drives the lamps |
+| 7 | 220 Ω resistor, 0.25 W | 1 | One per lamp. Sets LED current; see [Lamps](#lamps--mcp23017-port-b) |
+| 1 | 100 nF ceramic capacitor | — | Decoupling, across the expander's VDD/VSS |
+| 1 | PCB or perfboard | 4 | See `hardware/little-voicemail.kicad_sch` |
 | 1 | 40-pin GPIO stacking header | 3 | To reach the pins the HAT sits on |
-| — | Hook-up wire, 2.8 mm spade connectors | 6 | Arcade buttons take spades |
+| 7 | 4-way JST-XH connector + crimps | 4 | One per button: switch pair + lamp pair |
+| — | Hook-up wire, 2.8 mm spade connectors | 5 | If your buttons take spades rather than solder lugs |
 | 1 | Enclosure | 10–25 | Laser-cut ply or a project box; see below |
 
-**Total: roughly £130 for the Pi 4 build, or £95–100 with a Pi Zero 2 W.**
+**Total: roughly £115 for the Pi 4 build, or £85 with a Pi Zero 2 W.**
 
 ### Where to buy
 
 - ReSpeaker HAT — [Seeed Studio](https://www.seeedstudio.com/ReSpeaker-2-Mics-Pi-HAT-v2.html), The Pi Hut, Pimoroni
-- Arcade buttons — Arcade World UK, Pimoroni, or AliExpress in bulk (cheapest
-  by a distance if you can wait). Search "30mm illuminated arcade button 5V"
-- MCP23017 / ULN2803 — The Pi Hut, Rapid, Mouser
+- Buttons — Arcade World UK, Pimoroni, The Pi Hut, or AliExpress in bulk.
+  Search "30mm illuminated arcade button", and check whether the LED is bare
+  or a pre-wired 5 V module before ordering
+- MCP23017, resistors, connectors — The Pi Hut, Rapid, Mouser
 
 ### Substitutions worth knowing about
 
@@ -185,44 +194,45 @@ produce, so it is not the recommended path.
   `output_device` in the config to the USB card and skip the HAT entirely.
 - **Cheap USB mic + powered speaker** (~£10) — works, but the pickup is poor
   enough that a child has to lean in, which defeats the point.
-- **16 mm illuminated pushbuttons** (~£1.50 each) — these ship with a *bare*
-  LED and no built-in resistor, so you pick the current with a series resistor
-  (220 Ω–1 kΩ). At ~9 mA each, ten lamps draw 91 mA, which fits inside the
-  MCP23017's 150 mA package limit — so **the ULN2803s could be dropped** and
-  the lamps driven straight off expander #2.
-
-  Two catches. Wire them as active-low sinks (anode → +5 V through the
-  resistor, cathode → expander pin, drive **low** to light). Sourcing from the
-  expander does not work: it runs at 3.3 V and sags to ~2.7 V under load,
-  while white and blue LEDs need ~3.0 V. Sinking from the 5 V rail gives
-  proper headroom for any colour. This also inverts the LED word, so
-  `leds.py` and `configure_outputs()` would need to change with it.
-
-  The bigger objection is ergonomic: a 16 mm button has a ~12 mm cap, which
-  is a fingertip-sized target for a four-year-old and leaves the 45 mm grid
-  mostly empty panel. If you want smaller than 30 mm, 24 mm is the sensible
-  floor — and keep the 60 mm push-to-talk whatever you do, since the design
-  leans on it being unmistakable by feel.
+- **Pre-wired 5 V LED buttons** — most 30 mm arcade buttons ship with an LED
+  module that has its resistor built in and draws ~20 mA fixed. Seven of those
+  is 140 mA, which still fits the expander's 150 mA package limit but leaves
+  almost no margin. They work; you just lose the ability to tune brightness,
+  and the schematic's series resistors become links. Bare-LED buttons are the
+  better buy here.
+- **16 mm illuminated pushbuttons** (~£1.50 each) — electrically ideal: bare
+  LED, you pick the current, and they are cheap. The objection is ergonomic.
+  A 16 mm button has a ~12 mm cap, which is a fingertip-sized target for a
+  four-year-old and leaves a 45 mm grid mostly empty panel. If you want
+  smaller than 30 mm, 24 mm is the sensible floor — and keep the 60 mm
+  push-to-talk whatever you do, since the design leans on it being
+  unmistakable by feel.
 
 ## Wiring
 
-### I²C addresses
+### I²C address
 
 | Chip | A2 A1 A0 | Address | Purpose |
 |------|----------|---------|---------|
-| MCP23017 #1 | GND GND GND | `0x20` | Ten button inputs |
-| MCP23017 #2 | GND GND 3V3 | `0x21` | Ten lamp outputs |
+| MCP23017 | GND GND GND | `0x20` | Port A: seven switches. Port B: seven lamps |
 
-Both share SDA (GPIO 2) and SCL (GPIO 3), which the ReSpeaker HAT passes
-through. Tie `RESET` (pin 18) on both chips to 3V3 — leaving it floating
-causes intermittent resets that look like phantom button presses.
+It shares SDA (GPIO 2) and SCL (GPIO 3) with the codec, which the ReSpeaker
+HAT passes through. Tie `RESET` (pin 18) to 3V3 — leaving it floating causes
+intermittent resets that look like phantom button presses. Tie `A0`, `A1` and
+`A2` (pins 15, 16, 17) to GND for address `0x20`.
 
-Check them with `i2cdetect -y 1` — you should see `20` and `21`.
+Do **not** add I²C pull-up resistors. The Pi already fits 1.8 kΩ pull-ups on
+SDA and SCL; another pair in parallel is unnecessary and pulls the bus harder
+than it needs.
 
-### Buttons → MCP23017 #1 (0x20)
+Check with `i2cdetect -y 1` — you should see `20`, alongside the codec's own
+address.
+
+### Buttons → MCP23017 port A
 
 Every button switch goes between its expander pin and **GND**. The internal
-pull-ups are enabled in software, so no external resistors are needed.
+pull-ups are enabled in software, so no external resistors are needed, and a
+pressed button reads 0.
 
 | Button | Expander pin | Chip pin |
 |--------|--------------|---------:|
@@ -232,40 +242,61 @@ pull-ups are enabled in software, so no external resistors are needed.
 | Contact 4 | GPA3 | 24 |
 | Contact 5 | GPA4 | 25 |
 | Contact 6 | GPA5 | 26 |
-| Contact 7 | GPA6 | 27 |
-| Contact 8 | GPA7 | 28 |
-| Contact 9 | GPB0 | 1 |
-| **Push to talk** | GPB1 | 2 |
+| **Push to talk** | GPA6 | 27 |
 
-### Lamps → MCP23017 #2 (0x21) → ULN2803
+GPA7 (pin 28) is unused and left as an input.
 
-The expander drives the ULN2803 inputs; the ULN2803 outputs sink the LED
-cathodes. LED anodes all go to **+5 V**.
+### Lamps → MCP23017 port B
+
+The lamps **sink** to the expander: anode to +5 V through a series resistor,
+cathode to the pin. A pin driven **low** lights its lamp, and the pins idle
+high. `leds.py` inverts in one place (`_write`), so everything above it reads
+in positive logic.
 
 ```
-  MCP23017 #2 pin ──► ULN2803 IN(n)      ULN2803 OUT(n) ──► LED cathode
-                                                 LED anode ──► +5V
-  ULN2803 pin 9  (GND) ──► GND
-  ULN2803 pin 10 (COM) ──► +5V, or leave unconnected
+  +5V ──[220 Ω]──▶|── MCP23017 GPB(n)      (drive LOW to light)
+                  LED
 ```
 
-> **Pin 9 is GND and pin 10 is COM**, not the other way round. Swapping them
-> puts +5 V on the ground pin and ties the flyback-diode common to 0 V, which
-> will not work and will most likely destroy the chip. COM only matters for
-> inductive loads; with LEDs it can simply be left floating.
+| Lamp | Expander pin | Chip pin |
+|------|--------------|---------:|
+| Contact 1 | GPB0 | 1 |
+| Contact 2 | GPB1 | 2 |
+| Contact 3 | GPB2 | 3 |
+| Contact 4 | GPB3 | 4 |
+| Contact 5 | GPB4 | 5 |
+| Contact 6 | GPB5 | 6 |
+| **Push to talk** | GPB6 | 7 |
 
-| Lamp | Expander pin | ULN2803 |
-|------|--------------|---------|
-| Contact 1–8 | GPA0–GPA7 | #1, channels 1–8 |
-| Contact 9 | GPB0 | #2, channel 1 |
-| Push to talk | GPB1 | #2, channel 2 |
+GPB7 (pin 8) is unused.
 
-Most 5 V arcade buttons have the resistor built in. If yours are bare LEDs,
-put 150 Ω in series with each one.
+**Why sink rather than source.** The expander runs at 3.3 V and its output
+high sags under load, leaving nothing for a white or blue LED at ~3.0 V
+forward. Pulling the cathode down against a 5 V rail works for every colour.
+When the pin is high there is only 1.7 V across resistor and LED, below the
+forward voltage of any of them, so the lamp is properly off.
+
+**Sizing the resistor.** 220 Ω from 5 V gives roughly:
+
+| LED colour | Vf | Current | Seven lamps |
+|------------|---:|--------:|------------:|
+| White / blue | ~3.0 V | 9 mA | 64 mA |
+| Green / yellow | ~2.2 V | 13 mA | 91 mA |
+| Red | ~2.0 V | 14 mA | 95 mA |
+
+All well inside the expander's 25 mA per pin and 150 mA per package. Go up to
+470 Ω if you want them dimmer for a bedroom; 220 Ω is the brightest value that
+is safe for every colour.
 
 > **Check before you solder.** Some arcade buttons ship with 12 V LED modules
-> that look identical. On 5 V they glow dimly or not at all. The LED module
-> usually unscrews and can be swapped.
+> that look identical to 5 V ones. On 5 V they glow dimly or not at all. The
+> LED module usually unscrews and can be swapped for a bare LED.
+
+### Schematic
+
+`hardware/little-voicemail.kicad_sch` has the whole thing drawn up, ready to
+turn into a PCB. See [hardware/README.md](hardware/README.md) for the net list
+and board notes.
 
 ### Speaker
 
@@ -275,15 +306,22 @@ enough for a bedroom, not for a garden.
 
 ## Power
 
-The amp and ten LEDs together can pull well over an amp on top of the Pi.
-Use the official 3 A supply. If lamps flicker when several are lit at once,
-that is brownout, not a software bug — check the supply first.
+The amp dominates here: seven lamps at 220 Ω add at most ~95 mA, but the
+class-D amp draws real current on peaks. Use the official 3 A supply. If
+lamps dim when several are lit at once, that is brownout, not a software
+bug — check the supply first.
+
+The lamps run off the header's **+5 V**, not 3V3, so they do not load the
+Pi's 3.3 V regulator. Only the expander itself sits on 3V3, at under a
+milliamp.
 
 ## Enclosure
 
-The nine buttons want to be in a 3×3 grid at roughly 45 mm centres, with the
+The six buttons want to be in a 3×2 grid at roughly 45 mm centres, with the
 push-to-talk button clearly separated below and physically bigger so it is
-unmistakable by feel.
+unmistakable by feel. Six in two rows of three suits a small child better
+than nine did: the same panel area gives more room around each target, and
+there is less to scan.
 
 Leave the mic openings clear — the ReSpeaker's two mics are at opposite edges
 of the board, and burying them behind a panel ruins the far-field pickup.

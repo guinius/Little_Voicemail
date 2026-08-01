@@ -11,8 +11,9 @@ from .mcp23017 import MCP23017, open_bus
 
 log = logging.getLogger(__name__)
 
-BUTTON_EXPANDER_ADDR = 0x20
-LED_EXPANDER_ADDR = 0x21
+# One expander carries the lot: port A reads the seven switches, port B
+# sinks the seven lamps. A0/A1/A2 tied to GND gives 0x20.
+EXPANDER_ADDR = 0x20
 
 __all__ = [
     "PTT",
@@ -28,7 +29,7 @@ __all__ = [
 
 @dataclass
 class Hardware:
-    """Bundles the two expanders and the readers/controllers on top."""
+    """Bundles the expander and the readers/controllers on top."""
 
     buttons: ButtonReader
     leds: LedController
@@ -38,27 +39,29 @@ class Hardware:
     @classmethod
     def create(cls, bus_number: int = 1) -> "Hardware":
         bus, live = open_bus(bus_number)
-        button_chip = MCP23017(bus, BUTTON_EXPANDER_ADDR)
-        led_chip = MCP23017(bus, LED_EXPANDER_ADDR)
+        chip = MCP23017(bus, EXPANDER_ADDR)
         if live:
             try:
-                button_chip.read_gpio()
-                led_chip.read_gpio()
+                chip.read_gpio()
             except OSError as exc:
                 log.error(
-                    "MCP23017 not responding at 0x%02X/0x%02X (%s); "
+                    "MCP23017 not responding at 0x%02X (%s); "
                     "check wiring and `i2cdetect -y 1`",
-                    BUTTON_EXPANDER_ADDR, LED_EXPANDER_ADDR, exc,
+                    EXPANDER_ADDR, exc,
                 )
                 live = False
         return cls(
-            buttons=ButtonReader(button_chip, live_hardware=live),
-            leds=LedController(led_chip, live_hardware=live),
+            buttons=ButtonReader(chip, live_hardware=live),
+            leds=LedController(chip, live_hardware=live),
             live=live,
             _bus=bus,
         )
 
     def start(self) -> None:
+        # Lamps first: configure_outputs() sets port B idling high (dark)
+        # before the button reader touches port A, so nothing flashes on
+        # the way up. Both calls are read-modify-write, so either order is
+        # safe - this one is just tidier to watch.
         self.leds.start()
         self.buttons.start()
 

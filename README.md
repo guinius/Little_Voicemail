@@ -1,20 +1,18 @@
 # Little Voicemail
 
-A screenless push-to-talk voice messenger for kids. Nine big lit-up buttons,
+A screenless push-to-talk voice messenger for kids. Six big lit-up buttons,
 one per person. Press a button, hold push-to-talk, say something — it arrives
 as a voice message on the grown-up's phone. When a reply comes back, that
 person's button glows until the child presses it and listens.
 
 No screen, no feed, no typing, no way to reach anyone who is not on one of the
-nine buttons.
+six buttons.
 
 ```
         ┌─────────────────────────────┐
         │   ①      ②      ③          │
-        │                             │
-        │   ④      ⑤      ⑥          │     ← nine lit contact buttons
-        │                             │
-        │   ⑦      ⑧      ⑨          │
+        │                             │     ← six lit contact buttons
+        │   ④      ⑤      ⑥          │
         │                             │
         │      ┌───────────────┐      │
         │      │  PUSH TO TALK │      │     ← hold to record
@@ -43,7 +41,7 @@ below is built on [signal-cli](https://github.com/AsamK/signal-cli).
 
 | | Feature |
 |---|---|
-| 1 | Nine buttons, one contact each |
+| 1 | Six buttons, one contact each |
 | 2 | Parents assign contacts to buttons from the web UI |
 | 3 | Selected contact lights steady for 30s, then lapses back to standby |
 | 4 | Hold push-to-talk to record; auto-stops at 60s; the PTT lamp is lit while recording |
@@ -54,7 +52,7 @@ below is built on [signal-cli](https://github.com/AsamK/signal-cli).
 | 9 | Contacts set by phone number + nickname, or pulled from Signal |
 | 10 | Ringtone selectable in the web UI |
 | 11 | Three quiet-time windows (school, nap, bedtime), each independently toggleable |
-| 12 | During quiet time the device sleeps; any press flashes all nine lights 3× |
+| 12 | During quiet time the device sleeps; any press flashes all six lights 3× |
 | 13 | Multiple messages play back to back with a 1s gap |
 | 14 | Reading a message on a parent's phone clears the light here automatically |
 | 15 | The web UI checks GitHub for updates and can update and reboot in one click |
@@ -69,8 +67,8 @@ materials and part links.
   the ARMv6 Pi Zero v1.3 (see [HARDWARE.md](HARDWARE.md#choosing-a-board))
 - ReSpeaker 2-Mics Pi HAT v2 — dual far-field mics, onboard amp
 - 3 W 4 Ω speaker
-- 9 × 30 mm illuminated arcade buttons + 1 × 60 mm for push-to-talk
-- 2 × MCP23017 I²C expanders and 2 × ULN2803 driver arrays
+- 6 × 30 mm illuminated buttons + 1 × 60 mm for push-to-talk
+- 1 × MCP23017 I²C expander (no driver arrays needed at this size)
 
 The ReSpeaker mics are far-field, so there is **no handset** — the child talks
 at the box from across the room.
@@ -105,6 +103,10 @@ src/
   web/
     app.py            Flask parent UI
     server.py         HTTPS with a self-signed certificate
+
+hardware/
+  little-voicemail.kicad_sch   schematic for the button/lamp board
+  README.md                    netlist, connector pinout, board notes
 ```
 
 Three systemd services: `signal-cli` (the messaging daemon),

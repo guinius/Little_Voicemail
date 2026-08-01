@@ -16,10 +16,7 @@
     { "slot": 3, "name": "", "number": "", "enabled": false },
     { "slot": 4, "name": "", "number": "", "enabled": false },
     { "slot": 5, "name": "", "number": "", "enabled": false },
-    { "slot": 6, "name": "", "number": "", "enabled": false },
-    { "slot": 7, "name": "", "number": "", "enabled": false },
-    { "slot": 8, "name": "", "number": "", "enabled": false },
-    { "slot": 9, "name": "", "number": "", "enabled": false }
+    { "slot": 6, "name": "", "number": "", "enabled": false }
   ],
   "audio": {
     "ringtone": "chime.wav",
