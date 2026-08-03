@@ -8,11 +8,14 @@ import asyncio
 
 import pytest
 
+from src.config import NUM_CONTACTS
 from src.hardware.buttons import (
     BUTTON_MASK,
+    CONTACT_BITS,
     DEBOUNCE_SECONDS,
     HOLD_THRESHOLD,
     PTT,
+    PTT_BIT,
     Action,
     ButtonReader,
 )
@@ -24,7 +27,7 @@ def pressed(*slots) -> int:
     """Raw word with the given slots held down (active low)."""
     word = BUTTON_MASK
     for slot in slots:
-        bit = 9 if slot == PTT else slot - 1
+        bit = PTT_BIT if slot == PTT else CONTACT_BITS[slot]
         word &= ~(1 << bit)
     return word & BUTTON_MASK
 
@@ -126,9 +129,9 @@ def test_releasing_one_button_leaves_the_other_held(reader):
     assert reader.is_held(PTT)
 
 
-def test_all_nine_contacts_map_to_distinct_bits(reader):
+def test_all_contacts_map_to_distinct_bits(reader):
     seen = set()
-    for slot in range(1, 10):
+    for slot in range(1, NUM_CONTACTS + 1):
         word = pressed(slot)
         assert word not in seen
         seen.add(word)

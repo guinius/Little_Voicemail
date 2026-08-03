@@ -55,10 +55,10 @@ It installs packages, enables I²C, fetches signal-cli, creates the `voicemail`
 service user, and starts the web UI. It does **not** start the phone service
 yet — there is no Signal account to talk to.
 
-Verify the expanders are visible:
+Verify the expander is visible:
 
 ```bash
-i2cdetect -y 1     # expect 20 and 21
+i2cdetect -y 1     # expect 20, alongside the codec's own address
 ```
 
 ## 4. Set the parent password
@@ -182,15 +182,20 @@ update rolls the checkout back to where it started.
 ## Troubleshooting
 
 **Buttons and lights show "simulated"**
-I²C is not working. `i2cdetect -y 1` should show `20` and `21`. If it shows
-nothing, check `dtparam=i2c_arm=on` in `/boot/firmware/config.txt` and reboot.
-If only one address appears, check the address-select pins on the missing chip.
+I²C is not working. `i2cdetect -y 1` should show `20`. If it shows nothing,
+check `dtparam=i2c_arm=on` in `/boot/firmware/config.txt` and reboot. If it
+shows some other address, check A0/A1/A2 (pins 15-17) are all tied to GND.
 
 **Phantom presses, or lamps flickering on their own**
-The `RESET` pin (18) on one or both MCP23017s is floating. Tie it to 3V3.
+The `RESET` pin (18) on the MCP23017 is floating. Tie it to 3V3.
 
 **Lamps dim when several are lit**
-Power. Use the official 3 A supply, and check the ULN2803 COM pin is on +5 V.
+Power. Use the official 3 A supply. The lamps run from the header's +5 V, so
+check that rail rather than 3V3.
+
+**Lamps are all on when they should be off, or vice versa**
+The lamps are active low — anode to +5 V through the resistor, cathode to the
+expander pin. Wiring them the other way round inverts the whole panel.
 
 **"signal-cli is not installed" or voice notes arrive as file attachments**
 You are on a signal-cli older than 0.14.2, before `--voice-note` existed.

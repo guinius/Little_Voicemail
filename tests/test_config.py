@@ -10,10 +10,10 @@ def config(tmp_path):
     return Config(tmp_path / "config.json")
 
 
-def test_fresh_config_has_nine_empty_slots(config):
+def test_fresh_config_has_six_empty_slots(config):
     contacts = config.contacts()
     assert len(contacts) == NUM_CONTACTS
-    assert [c["slot"] for c in contacts] == list(range(1, 10))
+    assert [c["slot"] for c in contacts] == list(range(1, NUM_CONTACTS + 1))
     assert all(not c["enabled"] for c in contacts)
 
 
@@ -47,8 +47,8 @@ def test_disabled_contact_is_inert(config):
 
 
 def test_inbound_number_maps_back_to_its_slot(config):
-    config.set_contact(7, "Mum", "+447700900555")
-    assert config.slot_for_number("+447700900555") == 7
+    config.set_contact(5, "Mum", "+447700900555")
+    assert config.slot_for_number("+447700900555") == 5
 
 
 def test_number_matching_ignores_formatting(config):
@@ -96,7 +96,8 @@ def test_corrupt_config_falls_back_instead_of_bricking(tmp_path):
 
 
 def test_clear_contact_empties_the_slot(config):
-    config.set_contact(9, "Auntie", "+447700900321")
-    config.clear_contact(9)
-    assert config.contact(9) is None
-    assert config.contacts()[8]["name"] == ""
+    last = NUM_CONTACTS
+    config.set_contact(last, "Auntie", "+447700900321")
+    config.clear_contact(last)
+    assert config.contact(last) is None
+    assert config.contacts()[last - 1]["name"] == ""

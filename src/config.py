@@ -1,7 +1,7 @@
 """Configuration store for Little Voicemail.
 
 The config file is the single source of truth for everything a parent can
-change from the web UI: the nine contact slots, the ringtone, and the three
+change from the web UI: the six contact slots, the ringtone, and the three
 quiet-time windows. It is written atomically so a power cut mid-save can
 never leave a truncated file on the SD card.
 """
@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-NUM_CONTACTS = 9
+NUM_CONTACTS = 6
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "version": 1,
@@ -31,7 +31,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "jsonrpc_host": "127.0.0.1",
         "jsonrpc_port": 7583,
     },
-    # Nine slots, always present, indexed 1-9. An unassigned slot has an
+    # Six slots, always present, indexed 1-6. An unassigned slot has an
     # empty number and is inert: its button does nothing.
     "contacts": [
         {"slot": i, "name": "", "number": "", "enabled": False}
@@ -116,7 +116,7 @@ class Config:
             return self._data
 
     def _normalise(self) -> None:
-        """Guarantee nine contact slots numbered 1-9, in order."""
+        """Guarantee six contact slots numbered 1-6, in order."""
         by_slot = {
             c.get("slot"): c
             for c in self._data.get("contacts", [])
@@ -183,7 +183,7 @@ class Config:
             return [dict(c) for c in self._data["contacts"]]
 
     def contact(self, slot: int) -> dict[str, Any] | None:
-        """Return the contact in `slot` (1-9), or None if unassigned."""
+        """Return the contact in `slot` (1-6), or None if unassigned."""
         if not 1 <= slot <= NUM_CONTACTS:
             return None
         with self._lock:

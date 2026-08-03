@@ -1,8 +1,8 @@
 """Debounced button input.
 
-Ten buttons live on one MCP23017: bits 0-8 are contact buttons 1-9 and
-bit 9 is the push-to-talk button. They are wired switch-to-ground against
-the expander's internal pull-ups, so a pressed button reads 0.
+Seven buttons live on port A of the MCP23017: GPA0-GPA5 are contact buttons
+1-6 and GPA6 is the push-to-talk button. They are wired switch-to-ground
+against the expander's internal pull-ups, so a pressed button reads 0.
 
 The reader polls at 50 Hz rather than chasing the expander's interrupt pin.
 Two I2C word reads per poll is negligible load, push-to-talk needs the
@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 
+from ..config import NUM_CONTACTS
 from .mcp23017 import MCP23017
 
 log = logging.getLogger(__name__)
@@ -27,9 +28,10 @@ POLL_INTERVAL = 0.02
 DEBOUNCE_SECONDS = 0.03
 HOLD_THRESHOLD = 0.35  # a press longer than this counts as a hold
 
-CONTACT_BITS = {slot: slot - 1 for slot in range(1, 10)}  # slot 1-9 -> bit 0-8
-PTT_BIT = 9
-BUTTON_MASK = 0x03FF  # ten inputs
+# Contacts occupy GPA0 upwards, push-to-talk takes the next pin along.
+CONTACT_BITS = {slot: slot - 1 for slot in range(1, NUM_CONTACTS + 1)}
+PTT_BIT = NUM_CONTACTS
+BUTTON_MASK = (1 << (NUM_CONTACTS + 1)) - 1  # port A, one bit per button
 
 
 class Action(Enum):
@@ -40,7 +42,7 @@ class Action(Enum):
 
 @dataclass(frozen=True)
 class ButtonEvent:
-    slot: int          # 1-9 for contacts, PTT (0) for push-to-talk
+    slot: int          # 1-6 for contacts, PTT (0) for push-to-talk
     action: Action
     at: float
     duration: float = 0.0

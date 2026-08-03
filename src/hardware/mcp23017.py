@@ -1,15 +1,24 @@
 """Minimal MCP23017 I2C GPIO expander driver.
 
-The ReSpeaker HAT occupies the Pi's I2S and several GPIO pins, and ten
-illuminated buttons need twenty lines in total, so buttons and LEDs both
-live on MCP23017 expanders:
+Seven illuminated buttons need fourteen lines, which fits on one expander:
 
-    Expander A (0x20)  ten inputs  - buttons, pulled up, interrupt on change
-    Expander B (0x21)  ten outputs - LEDs, driven through ULN2803 arrays
+    Port A (GPA0-GPA6)  seven inputs   - buttons, pulled up, switch to ground
+    Port B (GPB0-GPB6)  seven outputs  - lamps, sinking LEDs from the 5V rail
+
+The expander is effectively free in pin terms: the ReSpeaker HAT already
+occupies I2C for codec control, so hanging it off SDA/SCL costs no
+additional Pi pins. Driving the lamps from Pi GPIO instead would spend
+fourteen pins and still need driver arrays, because the Pi's total GPIO
+budget (~50 mA) is below what seven lamps draw. See HARDWARE.md.
+
+Because both ports live on the same chip, configure_inputs() and
+configure_outputs() are read-modify-write: each touches only the bits in
+its mask and leaves the other port's configuration alone.
 
 Only the register set this project needs is implemented. Banked addressing
 is left at its power-on default (IOCON.BANK = 0), so A/B register pairs are
-adjacent and 16-bit accesses work as little-endian word reads.
+adjacent and 16-bit accesses work as little-endian word reads. Bits 0-7 of
+a 16-bit value are port A, bits 8-15 are port B.
 """
 
 from __future__ import annotations
@@ -65,21 +74,32 @@ class MCP23017:
 
     def configure_inputs(self, mask: int, pullup: bool = True,
                          interrupt: bool = True) -> None:
-        """Set every pin in `mask` (bit 0 = GPA0 .. bit 15 = GPB7) as input."""
-        self._write16(IODIRA, mask)
-        if pullup:
-            self._write16(GPPUA, mask)
+        """Set every pin in `mask` (bit 0 = GPA0 .. bit 15 = GPB7) as input.
+
+        Only the masked bits are touched, so configuring one port does not
+        disturb the other. Order does not matter relative to
+        configure_outputs().
+        """
+        self._write16(IODIRA, self._read16(IODIRA) | mask)
+        pull = self._read16(GPPUA)
+        self._write16(GPPUA, (pull | mask) if pullup else (pull & ~mask))
         # Interrupt on any change: leave INTCON cleared so the pin is
         # compared against its previous value rather than DEFVAL.
-        self._write16(INTCONA, 0x0000)
-        self._write16(GPINTENA, mask if interrupt else 0x0000)
+        self._write16(INTCONA, self._read16(INTCONA) & ~mask)
+        enabled = self._read16(GPINTENA)
+        self._write16(GPINTENA, (enabled | mask) if interrupt else (enabled & ~mask))
         self._write8(IOCON, IOCON_MIRROR | IOCON_ODR)
 
-    def configure_outputs(self, mask: int) -> None:
-        """Set every pin in `mask` as an output, driven low (LEDs off)."""
-        current = self._read16(IODIRA)
-        self._write16(IODIRA, current & ~mask)
-        self._write16(OLATA, 0x0000)
+    def configure_outputs(self, mask: int, initial: int = 0x0000) -> None:
+        """Set every pin in `mask` as an output, idling at `initial`.
+
+        The latch is written before the direction so the pin never briefly
+        drives a stale value on the way to becoming an output. `initial` is
+        the idle *pin* level, so active-low loads want their bits set.
+        """
+        latch = self._read16(OLATA)
+        self._write16(OLATA, (latch & ~mask) | (initial & mask))
+        self._write16(IODIRA, self._read16(IODIRA) & ~mask)
 
     # -- I/O -------------------------------------------------------------
 
