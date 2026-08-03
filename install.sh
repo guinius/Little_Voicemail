@@ -55,7 +55,7 @@ apt-get update -qq
 apt-get install -y -qq \
     python3 python3-venv python3-dev \
     git curl ca-certificates gnupg ffmpeg alsa-utils \
-    i2c-tools libasound2-dev device-tree-compiler \
+    i2c-tools libasound2-dev device-tree-compiler zip unzip \
     avahi-daemon \
     network-manager
 ok "packages installed"
@@ -258,6 +258,74 @@ ln -sf "/opt/signal-cli-${SIGNAL_CLI_VERSION}/bin/signal-cli" /usr/local/bin/sig
 # --voice-note landed in 0.14.2; without it we cannot send real voice notes.
 [[ -x /usr/local/bin/signal-cli ]] || die "signal-cli did not install"
 ok "signal-cli $SIGNAL_CLI_VERSION installed"
+
+# ---------------------------------------------------- libsignal native lib
+# signal-cli is mostly Java, but the Signal protocol itself is a Rust library
+# loaded through JNI - and the release tarball bundles that library for
+# x86_64 Linux, Windows and macOS *only*. Its own README says so. On a
+# Raspberry Pi there is simply no native library in the jar, so signal-cli
+# fails to start: no linking, no messages, nothing.
+#
+# The fix is the one signal-cli's wiki documents: drop the wrong-architecture
+# binaries and splice in one built for this machine. exquo/signal-libs-build
+# publishes them from GitHub Actions, versioned to match libsignal exactly.
+#
+# Doing this also takes the jar from ~65 MB to ~10 MB, because the bundle we
+# are replacing includes a 182 MB x86-64 shared object.
+patch_libsignal() {
+    local jar libsignal_version triple tmp url
+
+    jar="$(find "/opt/signal-cli-${SIGNAL_CLI_VERSION}/lib" \
+           -name 'libsignal-client-*.jar' -print -quit 2>/dev/null)"
+    [[ -n "$jar" ]] || die "no libsignal-client jar in the signal-cli install"
+
+    # Already patched by a previous run?
+    if unzip -l "$jar" 2>/dev/null | grep -qE ' libsignal_jni\.so$'; then
+        ok "libsignal native library already in place"
+        return 0
+    fi
+
+    # Take the version from the jar, so this keeps working across signal-cli
+    # bumps without a second version constant to forget to update.
+    libsignal_version="$(basename "$jar")"
+    libsignal_version="${libsignal_version#libsignal-client-}"
+    libsignal_version="${libsignal_version%.jar}"
+
+    case "$(uname -m)" in
+        aarch64) triple="aarch64-unknown-linux-gnu" ;;
+        armv7l)  triple="armv7-unknown-linux-gnueabihf" ;;
+        *)       die "no prebuilt libsignal for $(uname -m); see
+     https://github.com/AsamK/signal-cli/wiki/Provide-native-lib-for-libsignal" ;;
+    esac
+
+    log "Fetching libsignal $libsignal_version for $triple"
+    tmp="$(mktemp -d)"
+    if [[ -n "${LV_LIBSIGNAL_TARBALL:-}" && -f "${LV_LIBSIGNAL_TARBALL}" ]]; then
+        cp "$LV_LIBSIGNAL_TARBALL" "$tmp/lib.tar.gz"
+    else
+        url="https://github.com/exquo/signal-libs-build/releases/download/libsignal_v${libsignal_version}/libsignal_jni.so-v${libsignal_version}-${triple}.tar.gz"
+        curl -fsSL --retry 3 -o "$tmp/lib.tar.gz" "$url" || {
+            rm -rf "$tmp"
+            die "could not download libsignal $libsignal_version for $triple.
+     signal-cli cannot run on this architecture without it. Build it yourself
+     per https://github.com/AsamK/signal-cli/wiki/Provide-native-lib-for-libsignal
+     and re-run with LV_LIBSIGNAL_TARBALL pointing at the .tar.gz."
+        }
+    fi
+    tar -xzf "$tmp/lib.tar.gz" -C "$tmp" || { rm -rf "$tmp"; die "bad libsignal tarball"; }
+    [[ -f "$tmp/libsignal_jni.so" ]] \
+        || { rm -rf "$tmp"; die "no libsignal_jni.so in the tarball"; }
+
+    # Exactly the procedure from signal-cli's wiki: remove every bundled
+    # native, then add ours under the unqualified name the loader falls
+    # back to.
+    zip -q "$jar" -d '*signal_jni*' 2>/dev/null || true
+    ( cd "$tmp" && zip -quj "$jar" libsignal_jni.so ) \
+        || { rm -rf "$tmp"; die "could not splice libsignal into $jar"; }
+    rm -rf "$tmp"
+    ok "libsignal $libsignal_version ($triple) spliced in"
+}
+patch_libsignal
 
 # ------------------------------------------------------------------- code
 log "Installing Little Voicemail"
