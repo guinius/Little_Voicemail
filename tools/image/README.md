@@ -24,11 +24,36 @@ On x86 it also needs `qemu-user-static` with arm64 binfmt registered. On an
 arm64 machine — a Pi 4 or 5, an Apple-silicon VM, an `ubuntu-24.04-arm` CI
 runner — nothing is emulated and it is roughly four times faster.
 
-Expect **30–45 min** under emulation, **12–20 min** native, and a
-**~1.0–1.3 GB** `.img.xz`.
+Expect a **~1.0–1.3 GB** `.img.xz`, and roughly:
 
-`.github/workflows/image.yml` runs the same script and attaches the result to
-a release on any `v*` tag.
+| Where | Time |
+|---|---|
+| arm64, 4 cores (public-repo CI runner, Pi 5, Apple-silicon VM) | 12–20 min |
+| arm64, 2 cores (**private**-repo CI runner) | 30–45 min |
+| x86 under qemu emulation | 45–75 min |
+
+`xz -T0 -9` is the long pole, so core count matters more than anything else.
+GitHub's `ubuntu-24.04-arm` runners give private repositories two vCPUs and
+public repositories four, which is most of the difference between the first
+two rows.
+
+## Releasing
+
+`.github/workflows/image.yml` runs the same script. Push a `v*` tag and it
+builds, creates the release and attaches the `.img.xz` and its `.sha256` —
+there is no release to create by hand:
+
+```bash
+git tag -a v0.2.0 -m "..." && git push origin v0.2.0
+```
+
+To try a build without minting a release, use **Run workflow** on the Actions
+tab. That uploads the image as a 7-day artifact and skips the release step,
+which is gated on the tag.
+
+If the build succeeds but attaching to the release 403s, check Settings →
+Actions → General → **Workflow permissions**: repositories created after
+February 2023 default `GITHUB_TOKEN` to read-only.
 
 ## How it works
 

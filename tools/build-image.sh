@@ -24,7 +24,7 @@ REPO_ROOT="$(cd "$HERE/.." && pwd)"
 source "$HERE/image/lib.sh"
 
 BASE_URL_DEFAULT="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2024-11-19/2024-11-19-raspios-bookworm-arm64-lite.img.xz"
-SIGNAL_CLI_VERSION="${SIGNAL_CLI_VERSION:-0.14.6}"
+SIGNAL_CLI_VERSION="${SIGNAL_CLI_VERSION:-0.14.7}"
 
 BASE_URL="${LV_BASE_URL:-$BASE_URL_DEFAULT}"
 SRC_DIR="$REPO_ROOT"
@@ -84,7 +84,11 @@ if [[ "$(uname -m)" != "aarch64" ]]; then
 or docker run --privileged --rm tonistiigi/binfmt --install arm64)"
     warn "building under qemu emulation; this is several times slower than arm64"
 fi
-export NEED_QEMU QEMU_BIN
+# Native means the chroot can run arm64 binaries at full speed, so the verify
+# step is free to actually start a JVM and signal-cli. Under emulation that is
+# slow at best and a segfault at worst, so those checks are skipped.
+LV_NATIVE=$(( NEED_QEMU == 1 ? 0 : 1 ))
+export NEED_QEMU QEMU_BIN LV_NATIVE
 
 trap cleanup EXIT INT TERM
 

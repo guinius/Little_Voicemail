@@ -33,6 +33,31 @@ check "the app imports" env \
     "import src.web.app, src.web.portal, src.signal_link"
 check "signal-cli is on the path" test -x /usr/local/bin/signal-cli
 check "the service user exists" id voicemail
+
+# The one check that matters most, and the one that was missing when an image
+# shipped with a JRE too old to run signal-cli at all: start them both. A
+# wrong Java version installs perfectly happily and only fails later, on a
+# device with no screen, the first time a parent tries to link an account.
+#
+# Only when native - under qemu a JVM is slow at best and a segfault at worst.
+if [[ "${LV_NATIVE:-0}" == "1" ]]; then
+    # grep the version line, not head -n1: JAVA_TOOL_OPTIONS makes the JVM
+    # print "Picked up ..." first, which would misparse as a bad version.
+    if java_line="$(java -version 2>&1 | grep -m1 'version "')"; then
+        java_major="${java_line#*\"}"; java_major="${java_major%%\"*}"
+        java_major="${java_major%%.*}"
+        if [[ "$java_major" =~ ^[0-9]+$ ]] && [[ "$java_major" -ge 25 ]]; then
+            pass "java $java_major is new enough for signal-cli"
+        else
+            fail "java reports '${java_line}'; signal-cli needs 25 or newer"
+        fi
+    else
+        fail "java does not run"
+    fi
+    check "signal-cli actually starts" /usr/local/bin/signal-cli --version
+else
+    echo "  .. skipping the java and signal-cli run checks under emulation"
+fi
 check "the checkout is a git repo, so updates work" \
     git -C /opt/little-voicemail rev-parse HEAD
 

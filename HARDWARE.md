@@ -96,7 +96,9 @@ and both ULN2803 driver arrays are gone. Four chips became one.
 The messaging stack sets a hard floor here. signal-cli is a Java application,
 and the Signal protocol implementation it depends on (libsignal) is not
 something that can be reimplemented casually. That means the board must run
-Linux **and** a modern JVM.
+Linux **and** a modern JVM — signal-cli 0.14 requires **JRE 25 or newer**,
+which is ahead of what Debian stable ships, so `install.sh` fetches one rather
+than relying on the distribution.
 
 | Board | £ | Verdict |
 |-------|--:|---------|
