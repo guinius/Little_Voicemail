@@ -24,6 +24,12 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 
+# Image builds
+dist/
+*.img
+*.img.xz
+*.img.xz.sha256
+
 # Editors / OS
 .vscode/
 .idea/

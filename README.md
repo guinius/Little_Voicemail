@@ -75,14 +75,27 @@ at the box from across the room.
 
 ## Install
 
-On a fresh Raspberry Pi OS (Bookworm or newer):
+Download the latest `little-voicemail-*.img.xz` from
+[Releases](https://github.com/guinius/Little_Voicemail/releases) and flash it
+with Raspberry Pi Imager. It is Raspberry Pi OS Lite 64-bit with everything
+already installed — the ReSpeaker driver enabled, signal-cli in place, the web
+UI set to start on boot. Power on, open
+**https://littlevoicemail.local:8443**, set a password, link Signal from the
+Signal tab. No SSH at any point.
+
+If the box cannot reach your WiFi it raises its own `Little Voicemail setup`
+network so you can enter the details from a browser, rather than becoming
+unreachable.
+
+To install onto a Pi you already have instead:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/guinius/Little_Voicemail/master/install.sh | sudo bash
+sudo reboot
 ```
 
-Then follow [SETUP.md](SETUP.md) to wire the buttons, link a Signal account and
-assign contacts.
+Either way, [SETUP.md](SETUP.md) is the walkthrough. Building the image
+yourself is [tools/image/README.md](tools/image/README.md).
 
 ## How it is put together
 
@@ -95,6 +108,7 @@ src/
   messages.py         SQLite queue of unheard messages, survives power cuts
   audio.py            arecord → opus encode → send; ffplay for playback
   signal_client.py    signal-cli JSON-RPC client
+  signal_link.py      linking to a Signal account from the web UI
   updater.py          GitHub version check and one-click self-update
   hardware/
     mcp23017.py       I²C expander driver
@@ -103,16 +117,23 @@ src/
   web/
     app.py            Flask parent UI
     server.py         HTTPS with a self-signed certificate
+    portal.py         WiFi onboarding hotspot, and the http→https redirect
+
+tools/
+  build-image.sh      builds the prebuilt Raspberry Pi image
+  image/              the pieces it installs, and how it works
 
 hardware/
   little-voicemail.kicad_sch   schematic for the button/lamp board
   README.md                    netlist, connector pinout, board notes
 ```
 
-Three systemd services: `signal-cli` (the messaging daemon),
-`little-voicemail` (buttons, lights, audio) and `little-voicemail-web`
-(the parent UI). They are deliberately separate — a crash in the web UI
-cannot take the phone down.
+Four systemd services: `signal-cli` (the messaging daemon),
+`little-voicemail` (buttons, lights, audio), `little-voicemail-web` (the
+parent UI) and `little-voicemail-portal` (WiFi onboarding, and port 80). They
+are deliberately separate — a crash in the web UI cannot take the phone down.
+The first two stay disabled until a Signal account is linked, because without
+one there is nothing for them to do.
 
 ## Development
 
@@ -122,12 +143,15 @@ on from a laptop:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt pytest pytest-asyncio
-.venv/bin/python -m pytest            # 83 tests
+.venv/bin/python -m pytest            # 144 tests
 .venv/bin/python -m src.web.server --no-tls --port 8080
 ```
 
 With no I²C bus present the hardware layer falls back to a null bus and logs
-that buttons and lights are simulated.
+that buttons and lights are simulated. Signal linking and the WiFi portal
+shell out to `signal-cli` and `lv-netctl`, neither of which exists on a
+laptop, so those pages will report them missing rather than doing anything —
+the tests stub both.
 
 ## Licence
 

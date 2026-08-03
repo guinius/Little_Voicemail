@@ -13,6 +13,7 @@ the web UI from taking the phone down, and vice versa.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ from pathlib import Path
 
 from flask import (
     Flask,
+    Response,
     flash,
     jsonify,
     redirect,
@@ -39,8 +41,10 @@ from ..paths import (
     default_config_path,
     default_data_dir,
     default_sounds_dir,
+    signal_config_dir,
 )
 from ..quiet_hours import QuietHours, parse_hhmm
+from ..signal_link import SignalLinker
 from ..updater import Updater
 
 log = logging.getLogger(__name__)
@@ -53,6 +57,7 @@ def create_app(
     config_path: Path | None = None,
     data_dir: Path | None = None,
     sounds_dir: Path | None = None,
+    linker: SignalLinker | None = None,
 ) -> Flask:
     app = Flask(__name__)
     config = Config(config_path or default_config_path())
@@ -61,6 +66,8 @@ def create_app(
 
     queue = MessageQueue(data_dir / "messages.db")
     updater = Updater(config)
+    # Injectable so tests never fork sudo, systemctl or a JVM.
+    linker = linker or SignalLinker(config, signal_dir=signal_config_dir())
     quiet = QuietHours(config)
     audio = AudioEngine(config, work_dir=data_dir / "recordings", sounds_dir=sounds_dir)
 
@@ -119,7 +126,9 @@ def create_app(
                 config.set(generate_password_hash(password), "web", "password_hash")
                 session.clear()
                 session["authenticated"] = True
-                return redirect(url_for("index"))
+                # Nothing works until a Signal account is linked, so go
+                # straight there rather than to an empty status page.
+                return redirect(url_for("signal_page"))
         return render_template("first_run.html")
 
     @app.route("/logout")
@@ -197,6 +206,17 @@ def create_app(
             windows=config.get("quiet_times", default=[]),
             day_names=DAY_NAMES,
             active=quiet.active_window(),
+        )
+
+    @app.route("/signal", methods=["GET"])
+    @login_required
+    def signal_page():
+        return render_template(
+            "signal.html",
+            account=linker.account,
+            link=linker.snapshot(),
+            services=linker.service_states(),
+            signal_cli=linker.available,
         )
 
     @app.route("/system", methods=["GET"])
@@ -301,11 +321,71 @@ def create_app(
                 updated.append({"slot": entry["slot"], "name": name})
         return jsonify({"updated": updated, "known": len(by_number)})
 
+    # -- signal linking --------------------------------------------------
+    #
+    # No CSRF token: nothing in this app has one, and SESSION_COOKIE_SAMESITE
+    # ="Lax" already stops a cross-site POST from carrying the session.
+
+    @app.route("/api/signal/link/start", methods=["POST"])
+    @login_required
+    def api_signal_link_start():
+        force = bool(_json_field(request, "force"))
+        started, reason = linker.start(force=force)
+        if not started:
+            return jsonify({"error": reason}), 409
+        return jsonify({"started": True, "link": linker.snapshot()})
+
+    @app.route("/api/signal/link/status")
+    @login_required
+    def api_signal_link_status():
+        return jsonify(
+            {
+                "link": linker.snapshot(),
+                "account": linker.account,
+                "services": linker.service_states(),
+            }
+        )
+
+    @app.route("/api/signal/link/cancel", methods=["POST"])
+    @login_required
+    def api_signal_link_cancel():
+        return jsonify({"cancelled": linker.cancel()})
+
+    @app.route("/api/signal/link/qr.svg")
+    @login_required
+    def api_signal_link_qr():
+        """The URI as a QR code, for the iOS path that needs a second screen."""
+        uri = linker.snapshot()["uri"]
+        if not uri:
+            return jsonify({"error": "no link in progress"}), 404
+        try:
+            import segno
+        except ImportError:
+            return jsonify({"error": "QR rendering is unavailable"}), 501
+        buffer = io.BytesIO()
+        segno.make(uri, error="m").save(
+            buffer, kind="svg", scale=8, border=2, dark="#111", light="#fff"
+        )
+        response = Response(buffer.getvalue(), mimetype="image/svg+xml")
+        # A provisioning URI is a secret and a short-lived one.
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @app.route("/api/signal/unlink", methods=["POST"])
+    @login_required
+    def api_signal_unlink():
+        ok, detail = linker.unlink()
+        if not ok:
+            return jsonify({"error": detail}), 500
+        return jsonify({"ok": True, "parked": detail})
+
     @app.context_processor
     def inject_globals():
         return {
             "app_version": updater.local_version(),
             "quiet_now": quiet.is_quiet(),
+            "signal_linked": bool(config.get("signal", "account", default="")),
         }
 
     return app
@@ -405,3 +485,9 @@ def _clamp_float(value, low: float, high: float, fallback: float) -> float:
 
 def _digits(number: str) -> str:
     return "".join(ch for ch in (number or "") if ch.isdigit())
+
+
+def _json_field(req, name: str):
+    if req.is_json:
+        return (req.get_json(silent=True) or {}).get(name)
+    return req.form.get(name)

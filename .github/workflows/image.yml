@@ -1,0 +1,87 @@
+name: Build the Raspberry Pi image
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      base_image_url:
+        description: Raspberry Pi OS Lite arm64 .img.xz to start from
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  image:
+    # Native arm64: no emulation, roughly four times faster, and it sidesteps
+    # the whole class of qemu-user failures around the JVM and apt postinsts.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Without this, the checkout stores a credential header in
+          # .git/config, and the builder copies .git into the image. The
+          # installer strips it as well; both, because the cost of getting
+          # this wrong is a live token inside a public download.
+          persist-credentials: false
+
+      - name: Make room
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+          df -h /
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            parted e2fsprogs dosfstools zerofree xz-utils rsync curl
+
+      - name: Build
+        run: |
+          sudo tools/build-image.sh \
+            --work-dir "${RUNNER_TEMP}/lv-image" \
+            --output-dir dist \
+            ${BASE_URL:+--base-url "$BASE_URL"}
+        env:
+          BASE_URL: ${{ inputs.base_image_url }}
+
+      - name: Summarise
+        run: |
+          ls -lh dist/
+          {
+            echo '### Image'
+            echo
+            echo '```'
+            cat dist/*.sha256
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: little-voicemail-image
+          path: dist/*
+          retention-days: 7
+          compression-level: 0  # already xz
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.img.xz
+            dist/*.sha256
+          body: |
+            Flash `little-voicemail-*.img.xz` with Raspberry Pi Imager
+            ("Use custom"). Check the `.sha256` first.
+
+            Everything is preinstalled: the ReSpeaker overlay is enabled and
+            the web UI comes up on first boot at
+            `https://littlevoicemail.local:8443`. Set your WiFi in Imager's
+            OS customisation; if you skip that, the box raises its own
+            "Little Voicemail setup" network so you can enter it from a
+            browser.

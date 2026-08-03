@@ -17,6 +17,7 @@ import argparse
 import datetime as dt
 import ipaddress
 import logging
+import os
 import socket
 import ssl
 import sys
@@ -47,14 +48,56 @@ def local_ip() -> str:
         probe.close()
 
 
+def certificate_names(hostname: str) -> tuple[list[str], list[str]]:
+    """The DNS names and IP addresses the certificate has to cover.
+
+    Both the configured hostname and the system one, because Raspberry Pi
+    Imager can set a hostname the config file has never heard of, and the
+    parent will type whichever one they were told about.
+    """
+    names = {hostname, socket.gethostname(), "littlevoicemail"}
+    names = {n for n in names if n and n != "localhost"}
+    dns = sorted(names) + sorted(f"{n}.local" for n in names) + ["localhost"]
+    addresses = ["127.0.0.1"]
+    address = local_ip()
+    if address not in addresses:
+        addresses.append(address)
+    return dns, addresses
+
+
+def _certificate_covers(cert_path: Path, dns: list[str], addresses: list[str]) -> bool:
+    """True if an existing certificate still matches how the box is reached."""
+    try:
+        from cryptography import x509
+
+        certificate = x509.load_pem_x509_certificate(cert_path.read_bytes())
+        san = certificate.extensions.get_extension_for_class(
+            x509.SubjectAlternativeName
+        ).value
+        have_dns = set(san.get_values_for_type(x509.DNSName))
+        have_ips = {str(ip) for ip in san.get_values_for_type(x509.IPAddress)}
+    except Exception:  # unreadable or SAN-less: treat as not covering
+        return False
+    return set(dns) <= have_dns and set(addresses) <= have_ips
+
+
 def ensure_certificate(hostname: str) -> tuple[Path, Path]:
-    """Return (cert, key), generating a self-signed pair if needed."""
+    """Return (cert, key), generating a self-signed pair if needed.
+
+    Regenerated when the box has become reachable by a name or address the
+    existing certificate does not cover - a new DHCP lease, an Imager-set
+    hostname, or a first start that happened while the setup hotspot was up
+    and the only address was the hotspot's own.
+    """
     directory = certs_dir()
     directory.mkdir(parents=True, exist_ok=True)
     cert_path = directory / "server.crt"
     key_path = directory / "server.key"
+    dns_names, addresses = certificate_names(hostname)
     if cert_path.exists() and key_path.exists():
-        return cert_path, key_path
+        if _certificate_covers(cert_path, dns_names, addresses):
+            return cert_path, key_path
+        log.info("the certificate no longer covers this box; making a new one")
 
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
@@ -69,17 +112,12 @@ def ensure_certificate(hostname: str) -> tuple[Path, Path]:
             x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Little Voicemail"),
         ]
     )
-    address = local_ip()
-    alt_names: list[x509.GeneralName] = [
-        x509.DNSName(hostname),
-        x509.DNSName(f"{hostname}.local"),
-        x509.DNSName("localhost"),
-        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
-    ]
-    try:
-        alt_names.append(x509.IPAddress(ipaddress.ip_address(address)))
-    except ValueError:
-        pass
+    alt_names: list[x509.GeneralName] = [x509.DNSName(n) for n in dns_names]
+    for address in addresses:
+        try:
+            alt_names.append(x509.IPAddress(ipaddress.ip_address(address)))
+        except ValueError:
+            pass
 
     now = dt.datetime.now(dt.timezone.utc)
     certificate = (
@@ -108,7 +146,16 @@ def ensure_certificate(hostname: str) -> tuple[Path, Path]:
 
 
 def start_http_redirect(https_port: int, http_port: int = 80) -> None:
-    """Bounce plain HTTP to HTTPS so no password is ever sent unencrypted."""
+    """Bounce plain HTTP to HTTPS so no password is ever sent unencrypted.
+
+    Skipped when the setup portal is installed: that owns port 80, because it
+    also has to serve the WiFi onboarding page there, and two services
+    fighting over one bind is a race nobody wins.
+    """
+    if os.environ.get("LV_HTTP_REDIRECT", "1") == "0":
+        log.info("port 80 is handled by the setup portal")
+        return
+
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     class RedirectHandler(BaseHTTPRequestHandler):

@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}Signal &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<h1>Signal</h1>
+
+<div class="card" id="account-card">
+  {% if account %}
+    <div class="banner success">This device is linked to <strong>{{ account }}</strong>.</div>
+    <dl class="kv">
+      <dt>signal-cli</dt>
+      <dd id="svc-signal-cli">
+        {% if services['signal-cli.service'].active %}
+          <span class="badge ok">running</span>
+        {% else %}
+          <span class="badge err">{{ services['signal-cli.service'].state }}</span>
+        {% endif %}
+      </dd>
+      <dt>Phone service</dt>
+      <dd id="svc-phone">
+        {% if services['little-voicemail.service'].active %}
+          <span class="badge ok">running</span>
+        {% else %}
+          <span class="badge err">{{ services['little-voicemail.service'].state }}</span>
+        {% endif %}
+      </dd>
+    </dl>
+    <p class="hint">
+      Unlinking stops the phone service and forgets the account on this box. It does
+      <em>not</em> remove the device from your phone &mdash; do that in Signal under
+      Settings &rarr; Linked devices. Messages already received stay on the box.
+    </p>
+    <div class="actions">
+      <button type="button" id="unlink" class="danger">Unlink this device</button>
+      <button type="button" id="relink" class="btn ghost">Link a different account</button>
+    </div>
+  {% else %}
+    <h2>Link a Signal account</h2>
+    <p>
+      Little Voicemail joins an existing Signal account as a companion device, the
+      same way Signal Desktop does. Everything sent to that account arrives here.
+    </p>
+    <div class="banner quiet">
+      <strong>Use a number the child is not otherwise using.</strong> A cheap PAYG SIM,
+      or a free number from a service that can receive SMS, keeps the child's box
+      separate from your own Signal account. Register the number in the Signal app on
+      a phone first.
+    </div>
+    {% if not signal_cli %}
+      <div class="banner error">
+        signal-cli is not installed on this device, so linking cannot start.
+        Re-run the installer, or flash the prebuilt image.
+      </div>
+    {% endif %}
+    <div class="actions">
+      <button type="button" id="start-link" {% if not signal_cli %}disabled{% endif %}>
+        Start linking
+      </button>
+    </div>
+  {% endif %}
+</div>
+
+<div class="card" id="link-card" hidden>
+  <h2>Finish on your phone</h2>
+
+  <p class="countdown" id="countdown"></p>
+
+  <div id="link-steps">
+    <div class="link-step" id="step-tap">
+      <a class="btn big" id="open-signal" href="#" rel="noreferrer">Open Signal and link this device</a>
+      <p class="hint plat plat-android" hidden>
+        Tap the button. Signal opens and asks whether to link this device &mdash; say yes.
+        You can do this on the same phone you are reading this page on.
+      </p>
+      <p class="hint plat plat-ios" hidden>
+        Tap the button and Signal will tell you that linking has to start from
+        <strong>Settings &rarr; Linked devices</strong>. Go there, choose
+        <strong>Link New Device</strong>, and scan the QR code below
+        <strong>from a second screen</strong> &mdash; a laptop, tablet or another phone
+        showing this page. Signal on iPhone requires a camera scan and cannot link to
+        itself.
+      </p>
+      <p class="hint plat plat-other" hidden>
+        This button only works on a phone with Signal installed. On a computer, show the
+        QR code below and scan it with Signal on the phone that owns the number.
+      </p>
+    </div>
+
+    <div class="link-step" id="step-copy">
+      <label for="link-uri">Or copy the link and paste it into Signal on another device:</label>
+      <div class="uri-row">
+        <input type="text" id="link-uri" class="uri-box" readonly>
+        <button type="button" id="copy-uri" class="btn ghost">Copy</button>
+      </div>
+    </div>
+
+    <details class="link-step" id="step-qr">
+      <summary>Show the QR code</summary>
+      <p class="hint">
+        In Signal on the phone: <strong>Settings &rarr; Linked devices &rarr; Link new
+        device</strong>, then scan this.
+      </p>
+      <img class="qr" id="qr" alt="QR code containing the Signal link" src="">
+    </details>
+  </div>
+
+  <div class="actions">
+    <button type="button" id="cancel-link" class="btn ghost">Cancel</button>
+  </div>
+
+  <pre class="log" id="link-log" hidden></pre>
+</div>
+
+<div class="card">
+  <h2>What happens next</h2>
+  <ol>
+    <li>Once the phone approves, the number is saved and the phone service starts.
+      It takes half a minute to connect.</li>
+    <li>Add people to the buttons under <a href="{{ url_for('contacts') }}">Contacts</a>.</li>
+    <li>Check <a href="{{ url_for('system') }}">System</a> shows Signal as connected.</li>
+  </ol>
+  <p class="hint">
+    If linking keeps failing, the usual cause is the clock: a box that has been
+    unplugged for a long time can be far enough out that Signal rejects it. It fixes
+    itself a minute or so after the network comes up.
+  </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const startBtn  = document.getElementById('start-link');
+  const relinkBtn = document.getElementById('relink');
+  const unlinkBtn = document.getElementById('unlink');
+  const cancelBtn = document.getElementById('cancel-link');
+  const copyBtn   = document.getElementById('copy-uri');
+  const linkCard  = document.getElementById('link-card');
+  const uriBox    = document.getElementById('link-uri');
+  const openLink  = document.getElementById('open-signal');
+  const qrImg     = document.getElementById('qr');
+  const qrStep    = document.getElementById('step-qr');
+  const tapStep   = document.getElementById('step-tap');
+  const steps     = document.getElementById('link-steps');
+  const countdown = document.getElementById('countdown');
+  const logBox    = document.getElementById('link-log');
+
+  // Signal behaves differently on the two platforms, so lead with whichever
+  // path actually works there. Every variant is rendered server-side, so a
+  // browser we do not recognise still sees all of it.
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isAndroid = /Android/.test(ua);
+  const platform = isIOS ? 'ios' : (isAndroid ? 'android' : 'other');
+  document.querySelectorAll('.plat-' + platform).forEach(el => { el.hidden = false; });
+  if (isIOS || platform === 'other') {
+    // The QR is the only path that completes here, so put it first and open it.
+    steps.insertBefore(qrStep, tapStep);
+    qrStep.open = true;
+  }
+
+  let polling = false;
+
+  function renderLink(link) {
+    const active = link.phase === 'starting' || link.phase === 'waiting';
+    linkCard.hidden = !active && link.phase !== 'linked';
+
+    if (link.uri) {
+      uriBox.value = link.uri;
+      // Set the href as a property, never through innerHTML.
+      openLink.href = link.uri;
+      if (qrImg.getAttribute('src') !== '{{ url_for("api_signal_link_qr") }}') {
+        qrImg.src = '{{ url_for("api_signal_link_qr") }}?t=' + Date.now();
+      }
+    }
+
+    if (link.message) {
+      logBox.hidden = false;
+      logBox.textContent = [link.message, ...(link.log || [])].filter(Boolean).join('\n');
+    }
+
+    if (active && link.seconds_left) {
+      const m = Math.floor(link.seconds_left / 60);
+      const s = String(link.seconds_left % 60).padStart(2, '0');
+      countdown.textContent = `This link expires in ${m}:${s}.`;
+    } else if (link.phase === 'timeout') {
+      countdown.textContent = 'The link expired. Start again for a fresh one.';
+    } else {
+      countdown.textContent = '';
+    }
+
+    if (link.phase === 'linked') {
+      countdown.textContent = '';
+      steps.hidden = true;
+      cancelBtn.hidden = true;
+      setTimeout(() => window.location.reload(), 4000);
+    }
+    return active;
+  }
+
+  async function poll() {
+    const res = await fetch('{{ url_for("api_signal_link_status") }}');
+    if (!res.ok) { polling = false; return; }
+    const data = await res.json();
+    const active = renderLink(data.link);
+    if (active) {
+      setTimeout(poll, 2000);
+    } else {
+      polling = false;
+      if (startBtn) { startBtn.disabled = false; startBtn.textContent = 'Start linking'; }
+    }
+  }
+
+  function beginPolling() {
+    if (polling) return;
+    polling = true;
+    poll();
+  }
+
+  async function startLink(force) {
+    if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'Starting...'; }
+    steps.hidden = false;
+    cancelBtn.hidden = false;
+    const res = await fetch('{{ url_for("api_signal_link_start") }}', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force: !!force}),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      alert('Could not start linking: ' + (body.error || res.statusText));
+      if (startBtn) { startBtn.disabled = false; startBtn.textContent = 'Start linking'; }
+      return;
+    }
+    linkCard.hidden = false;
+    beginPolling();
+  }
+
+  if (startBtn) startBtn.addEventListener('click', () => startLink(false));
+
+  if (relinkBtn) relinkBtn.addEventListener('click', () => {
+    if (!confirm('Link a different Signal account? The current one stops working here.')) return;
+    startLink(true);
+  });
+
+  if (unlinkBtn) unlinkBtn.addEventListener('click', async () => {
+    if (!confirm('Unlink this device? Messages stop arriving until you link again.')) return;
+    unlinkBtn.disabled = true;
+    const res = await fetch('{{ url_for("api_signal_unlink") }}', {method: 'POST'});
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      alert('Could not unlink: ' + (body.error || res.statusText));
+      unlinkBtn.disabled = false;
+      return;
+    }
+    window.location.reload();
+  });
+
+  cancelBtn.addEventListener('click', async () => {
+    await fetch('{{ url_for("api_signal_link_cancel") }}', {method: 'POST'});
+    linkCard.hidden = true;
+    polling = false;
+    if (startBtn) { startBtn.disabled = false; startBtn.textContent = 'Start linking'; }
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    try {
+      // Needs a secure context; fine over HTTPS once the certificate is accepted.
+      await navigator.clipboard.writeText(uriBox.value);
+    } catch (err) {
+      uriBox.select();
+      document.execCommand('copy');
+    }
+    copyBtn.textContent = 'Copied';
+    setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+  });
+
+  // A link started in another tab, or before a reload, is still running.
+  {% if link.phase in ('starting', 'waiting') %}
+    linkCard.hidden = false;
+    renderLink({{ link | tojson }});
+    beginPolling();
+  {% endif %}
+</script>
+{% endblock %}
