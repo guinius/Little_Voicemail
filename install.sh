@@ -25,7 +25,11 @@ DATA_DIR="/var/lib/little-voicemail"
 HELPER_DIR="/usr/local/lib/little-voicemail"
 BOOT_CONFIG="${LV_BOOT_CONFIG:-/boot/firmware/config.txt}"
 SERVICE_USER="voicemail"
-SIGNAL_CLI_VERSION="${SIGNAL_CLI_VERSION:-0.14.6}"
+SIGNAL_CLI_VERSION="${SIGNAL_CLI_VERSION:-0.14.7}"
+# signal-cli 0.14.0 raised its floor to Java 25, and 0.14.2 is the first
+# release with --voice-note, so there is no combination that runs on an
+# older JRE. Debian stable does not carry 25 yet, hence install_java below.
+JAVA_MIN=25
 SYSTEMCTL="/usr/bin/systemctl"
 
 log()  { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
@@ -45,12 +49,112 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq \
     python3 python3-venv python3-dev \
-    git curl ffmpeg alsa-utils \
+    git curl ca-certificates gnupg ffmpeg alsa-utils \
     i2c-tools libasound2-dev \
     avahi-daemon \
-    network-manager \
-    openjdk-21-jre-headless
+    network-manager
 ok "packages installed"
+
+# ------------------------------------------------------------------- java
+# signal-cli needs a JRE of at least $JAVA_MIN. Debian stable is behind - as
+# of Bookworm the newest OpenJDK in the archive is 17 - so this tries the
+# distro first and falls back rather than pinning a package name that only
+# exists on some releases. Whatever happens, the version is checked at the
+# end: a too-old JRE would install cleanly here and then fail with
+# UnsupportedClassVersionError the first time a parent tried to link an
+# account, on a box with no screen to show it on.
+
+java_major() {
+    local out
+    # Match the version line rather than taking the first: with
+    # JAVA_TOOL_OPTIONS or _JAVA_OPTIONS set - common in CI images and
+    # containers - the JVM prints "Picked up ..." ahead of it, and parsing
+    # that instead makes a perfectly good JRE look unusable.
+    out="$(java -version 2>&1 | grep -m1 'version "')" || return 1
+    # openjdk version "25.0.1" 2025-10-21  ->  25
+    out="${out#*\"}"
+    out="${out%%\"*}"
+    out="${out%%.*}"
+    [[ "$out" =~ ^[0-9]+$ ]] || return 1
+    printf '%s' "$out"
+}
+
+java_is_new_enough() {
+    local major
+    major="$(java_major 2>/dev/null)" || return 1
+    [[ "$major" -ge "$JAVA_MIN" ]]
+}
+
+try_apt_java() {
+    local package="$1"
+    apt-get install -y -qq "$package" >/dev/null 2>&1 || return 1
+    java_is_new_enough
+}
+
+add_adoptium_repo() {
+    local codename
+    codename="$(. /etc/os-release && echo "${VERSION_CODENAME:-}")"
+    [[ -n "$codename" ]] || return 1
+    install -d -m 0755 /etc/apt/keyrings
+    curl -fsSL --retry 3 https://packages.adoptium.net/artifactory/api/gpg/key/public \
+        | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg 2>/dev/null || return 1
+    chmod 0644 /etc/apt/keyrings/adoptium.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb ${codename} main" \
+        > /etc/apt/sources.list.d/adoptium.list
+    apt-get update -qq 2>/dev/null || return 1
+}
+
+install_temurin_tarball() {
+    # Last resort, and the same shape as the signal-cli install below: a
+    # tarball into /opt with a symlink. No apt repo, no key, works on any
+    # Debian. The trade is that it will not get security updates with the
+    # rest of the system.
+    local arch tmp url target
+    case "$(uname -m)" in
+        aarch64) arch="aarch64" ;;
+        armv7l)  arch="arm" ;;
+        x86_64)  arch="x64" ;;
+        *)       return 1 ;;
+    esac
+    target="/opt/temurin-${JAVA_MIN}-jre"
+    if [[ ! -x "$target/bin/java" ]]; then
+        tmp="$(mktemp -d)"
+        if [[ -n "${LV_JRE_TARBALL:-}" && -f "${LV_JRE_TARBALL}" ]]; then
+            cp "$LV_JRE_TARBALL" "$tmp/jre.tar.gz"
+        else
+            url="https://api.adoptium.net/v3/binary/latest/${JAVA_MIN}/ga/linux/${arch}/jre/hotspot/normal/eclipse"
+            curl -fsSL --retry 3 -o "$tmp/jre.tar.gz" "$url" || { rm -rf "$tmp"; return 1; }
+        fi
+        mkdir -p "$tmp/x"
+        tar -xzf "$tmp/jre.tar.gz" -C "$tmp/x" || { rm -rf "$tmp"; return 1; }
+        rm -rf "$target"
+        mv "$tmp/x"/* "$target" || { rm -rf "$tmp"; return 1; }
+        rm -rf "$tmp"
+    fi
+    # update-alternatives so `java` resolves for signal-cli's launcher and
+    # for anyone debugging over SSH.
+    update-alternatives --install /usr/bin/java java "$target/bin/java" 2000 >/dev/null
+    update-alternatives --set java "$target/bin/java" >/dev/null 2>&1 || true
+    java_is_new_enough
+}
+
+log "Installing a Java $JAVA_MIN runtime for signal-cli"
+if java_is_new_enough; then
+    ok "java $(java_major) already installed"
+elif try_apt_java "openjdk-${JAVA_MIN}-jre-headless"; then
+    ok "openjdk-${JAVA_MIN}-jre-headless from the distribution"
+elif add_adoptium_repo && try_apt_java "temurin-${JAVA_MIN}-jre"; then
+    ok "temurin-${JAVA_MIN}-jre from Adoptium"
+elif install_temurin_tarball; then
+    ok "Temurin $JAVA_MIN unpacked to /opt (no automatic security updates)"
+else
+    die "could not install a Java $JAVA_MIN runtime, which signal-cli requires.
+     Tried openjdk-${JAVA_MIN}-jre-headless, Adoptium's temurin-${JAVA_MIN}-jre
+     and the Temurin tarball. Install a JRE $JAVA_MIN+ by hand and re-run."
+fi
+java_is_new_enough \
+    || die "java reports version $(java_major || echo unknown), but signal-cli needs $JAVA_MIN+"
+ok "java $(java_major)"
 
 # --------------------------------------------------------- boot config.txt
 # Both of these are device-tree settings that only take effect after a

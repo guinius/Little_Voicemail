@@ -120,6 +120,7 @@ in_chroot() {
     local root="$1"; shift
     chroot "$root" env \
         DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C \
+        LV_NATIVE="${LV_NATIVE:-0}" \
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         "$@"
 }
