@@ -15,8 +15,15 @@ pass() { printf '\033[1;32m  ok\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m  !!\033[0m %s\n' "$*" >&2; BAD=1; }
 
 check() {
-    local what="$1"; shift
-    if "$@" >/dev/null 2>&1; then pass "$what"; else fail "$what"; fi
+    local what="$1" out; shift
+    # Capture rather than discard: a failing check with no output tells you
+    # only that something is wrong, which costs a whole build to diagnose.
+    if out="$("$@" 2>&1)"; then
+        pass "$what"
+    else
+        fail "$what"
+        [[ -n "$out" ]] && printf '     %s\n' "${out%%$'\n'*}" >&2
+    fi
 }
 
 echo "-- verifying the image"

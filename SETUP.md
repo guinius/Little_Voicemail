@@ -206,6 +206,26 @@ expander pin. Wiring them the other way round inverts the whole panel.
 You are on a signal-cli older than 0.14.2, before `--voice-note` existed.
 `signal-cli --version` to check.
 
+**`signal-cli --version` fails, or linking never starts**
+signal-cli is Java wrapped around a Rust library loaded through JNI, and the
+official release bundles that library for **x86_64 Linux only** — on a
+Raspberry Pi there is no native library in the jar at all, so it cannot start.
+
+`install.sh` handles this: it fetches a matching build from
+[exquo/signal-libs-build](https://github.com/exquo/signal-libs-build) and
+splices it into `libsignal-client-*.jar`, following
+[signal-cli's own instructions](https://github.com/AsamK/signal-cli/wiki/Provide-native-lib-for-libsignal).
+If that download failed — no network at install time, say — re-run the
+installer, or pass a tarball you fetched yourself:
+
+```bash
+sudo LV_LIBSIGNAL_TARBALL=/path/to/libsignal_jni.so-v0.99.1-aarch64-unknown-linux-gnu.tar.gz \
+    ./install.sh
+```
+
+The version must match the `libsignal-client-<version>.jar` in
+`/opt/signal-cli-*/lib/`.
+
 **Nothing happens when a message arrives**
 Check a quiet time is not running — the Status page says so at the top.
 
