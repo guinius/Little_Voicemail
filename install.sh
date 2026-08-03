@@ -24,6 +24,11 @@ CONFIG_DIR="/etc/little-voicemail"
 DATA_DIR="/var/lib/little-voicemail"
 HELPER_DIR="/usr/local/lib/little-voicemail"
 BOOT_CONFIG="${LV_BOOT_CONFIG:-/boot/firmware/config.txt}"
+# Which audio overlay the board needs. Default is the ReSpeaker 2-Mics Pi HAT
+# v2.0 (TLV320AIC3104), which is what HARDWARE.md specifies. For a v1.0 board
+# (WM8960 codec) use LV_AUDIO_OVERLAY=wm8960-soundcard, which is in-tree and
+# needs no compiling.
+AUDIO_OVERLAY="${LV_AUDIO_OVERLAY:-respeaker-2mic-v2_0}"
 SERVICE_USER="voicemail"
 SIGNAL_CLI_VERSION="${SIGNAL_CLI_VERSION:-0.14.7}"
 # signal-cli 0.14.0 raised its floor to Java 25, and 0.14.2 is the first
@@ -50,7 +55,7 @@ apt-get update -qq
 apt-get install -y -qq \
     python3 python3-venv python3-dev \
     git curl ca-certificates gnupg ffmpeg alsa-utils \
-    i2c-tools libasound2-dev \
+    i2c-tools libasound2-dev device-tree-compiler \
     avahi-daemon \
     network-manager
 ok "packages installed"
@@ -156,20 +161,52 @@ java_is_new_enough \
     || die "java reports version $(java_major || echo unknown), but signal-cli needs $JAVA_MIN+"
 ok "java $(java_major)"
 
+# ------------------------------------------------------- respeaker overlay
+# The codec needs a device-tree overlay, and which one depends on the board:
+#
+#   v2.0 (TLV320AIC3104)  respeaker-2mic-v2_0  -- compiled from the copy in
+#                         tools/image/, because it does NOT ship with the OS
+#   v1.0 (WM8960)         wm8960-soundcard     -- in-tree, ships with the OS
+#
+# `seeed-2mic-voicecard`, which older guides (including this project's own
+# SETUP.md) name, is neither: it belongs to Seeed's out-of-tree DKMS driver,
+# which broke after kernel 5.10 and which Seeed themselves no longer
+# recommend. Writing it into config.txt gets you a Pi that boots with no
+# sound card and no clue why.
+log "Installing the audio overlay ($AUDIO_OVERLAY)"
+overlay_dir="$(dirname "$BOOT_CONFIG")/overlays"
+if [[ -f "$overlay_dir/$AUDIO_OVERLAY.dtbo" ]]; then
+    ok "$AUDIO_OVERLAY ships with this image"
+elif [[ -f "$SOURCE_DIR/tools/image/$AUDIO_OVERLAY-overlay.dts" ]]; then
+    # -@ is required: the overlay targets &i2c1 and &sound by phandle, which
+    # needs the symbol table.
+    dtc -@ -I dts -O dtb -o "$overlay_dir/$AUDIO_OVERLAY.dtbo" \
+        "$SOURCE_DIR/tools/image/$AUDIO_OVERLAY-overlay.dts" 2>/dev/null \
+        || die "could not compile $AUDIO_OVERLAY-overlay.dts"
+    ok "compiled $AUDIO_OVERLAY.dtbo"
+else
+    die "no overlay '$AUDIO_OVERLAY': not in $overlay_dir, and no
+     tools/image/$AUDIO_OVERLAY-overlay.dts to compile. Set LV_AUDIO_OVERLAY
+     to a board that exists - wm8960-soundcard for a ReSpeaker v1.0."
+fi
+
 # --------------------------------------------------------- boot config.txt
-# Both of these are device-tree settings that only take effect after a
-# reboot, and both are needed before any of the hardware works: the codec
-# for audio, I2C for the buttons and lights.
-log "Configuring the boot overlay"
+# Device-tree settings, so they only take effect after a reboot, and nothing
+# works before they do: the codec for audio, I2C for the buttons and lights.
+log "Configuring $BOOT_CONFIG"
 if [[ -f "$BOOT_CONFIG" ]]; then
     grep -q '^dtparam=i2c_arm=on' "$BOOT_CONFIG" \
         || echo 'dtparam=i2c_arm=on' >> "$BOOT_CONFIG"
-    # On Bookworm and later the ReSpeaker driver is just this overlay, which
-    # ships with the OS. Writing it here rather than asking for it by hand
-    # removes the one genuinely manual step in the whole install.
-    grep -q '^dtoverlay=seeed-2mic-voicecard' "$BOOT_CONFIG" \
-        || echo 'dtoverlay=seeed-2mic-voicecard' >> "$BOOT_CONFIG"
-    ok "i2c and the ReSpeaker overlay are enabled in $BOOT_CONFIG"
+    # Earlier versions of this installer wrote an overlay that does not
+    # exist. Take it out, so re-running repairs a Pi rather than leaving a
+    # line that silently does nothing.
+    if grep -q '^dtoverlay=seeed-2mic-voicecard' "$BOOT_CONFIG"; then
+        sed -i '/^dtoverlay=seeed-2mic-voicecard/d' "$BOOT_CONFIG"
+        log "  removed the stale dtoverlay=seeed-2mic-voicecard line"
+    fi
+    grep -q "^dtoverlay=$AUDIO_OVERLAY" "$BOOT_CONFIG" \
+        || echo "dtoverlay=$AUDIO_OVERLAY" >> "$BOOT_CONFIG"
+    ok "i2c and $AUDIO_OVERLAY are enabled in $BOOT_CONFIG"
 else
     log "  no $BOOT_CONFIG (not a Raspberry Pi?); skipping"
 fi
@@ -179,22 +216,13 @@ if ! image_build && command -v raspi-config >/dev/null 2>&1; then
     raspi-config nonint do_i2c 0 || true
 fi
 
-# ------------------------------------------------------- respeaker driver
-if image_build; then
-    # A chroot has no sound cards to look at, so check the overlay the image
-    # will need is actually present. Raspberry Pi OS ships it; if a future
-    # release drops it, the image would boot with no sound card and nobody
-    # would find out until a Pi was in hand.
-    [[ -f /boot/firmware/overlays/seeed-2mic-voicecard.dtbo ]] \
-        || die "seeed-2mic-voicecard.dtbo is missing from this base image"
-    ok "ReSpeaker overlay present in the base image"
-else
-    log "Checking the ReSpeaker 2-Mic HAT"
+if ! image_build; then
+    log "Checking the ReSpeaker HAT"
     if aplay -l 2>/dev/null | grep -qi 'seeed\|wm8960\|tlv320'; then
-        ok "ReSpeaker detected"
+        ok "sound card detected"
     else
-        echo "  Not detected yet. The overlay has just been enabled, so reboot"
-        echo "  and check again with: aplay -l"
+        echo "  Not detected yet - the overlay has only just been enabled."
+        echo "  Reboot, then check with: aplay -l"
     fi
 fi
 

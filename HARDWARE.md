@@ -177,6 +177,20 @@ produce, so it is not the recommended path.
 
 **Total: roughly £115 for the Pi 4 build, or £85 with a Pi Zero 2 W.**
 
+> **Get the v2.0 HAT, and mind the driver advice you find online.** The v2.0
+> swapped the v1.0's WM8960 codec for the TLV320AIC3104 above, which is what
+> buys it Pi 5 support and 8–96 kHz. Both codecs have mainline kernel drivers,
+> so all either needs is a device-tree overlay: `respeaker-2mic-v2_0` for the
+> v2.0 — vendored in `tools/image/` and compiled by `install.sh`, because it
+> does not ship with Raspberry Pi OS — or the in-tree `wm8960-soundcard` for a
+> v1.0, selected with `LV_AUDIO_OVERLAY=wm8960-soundcard`.
+>
+> Do **not** install Seeed's out-of-tree `seeed-voicecard` driver, and ignore
+> any guide telling you to set `dtoverlay=seeed-2mic-voicecard`. That driver
+> broke after kernel 5.10 and Seeed themselves have moved off it; the overlay
+> does not exist on a stock Raspberry Pi OS, so the line does nothing at all
+> and you get a Pi that boots with no sound card.
+
 ### Where to buy
 
 - ReSpeaker HAT — [Seeed Studio](https://www.seeedstudio.com/ReSpeaker-2-Mics-Pi-HAT-v2.html), The Pi Hut, Pimoroni

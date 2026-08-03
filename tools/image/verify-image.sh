@@ -62,10 +62,19 @@ check "the checkout is a git repo, so updates work" \
     git -C /opt/little-voicemail rev-parse HEAD
 
 # -- boot configuration -----------------------------------------------------
-check "the ReSpeaker overlay ships with the base image" \
-    test -f /boot/firmware/overlays/seeed-2mic-voicecard.dtbo
-check "the ReSpeaker overlay is enabled" \
-    grep -q '^dtoverlay=seeed-2mic-voicecard' /boot/firmware/config.txt
+# Which overlay the image was built for; install.sh writes it, and the two
+# have to agree or the Pi boots with no sound card.
+AUDIO_OVERLAY="${LV_AUDIO_OVERLAY:-respeaker-2mic-v2_0}"
+check "the $AUDIO_OVERLAY overlay is installed" \
+    test -f "/boot/firmware/overlays/$AUDIO_OVERLAY.dtbo"
+check "the $AUDIO_OVERLAY overlay is enabled" \
+    grep -q "^dtoverlay=$AUDIO_OVERLAY" /boot/firmware/config.txt
+# Nothing should still be asking for the overlay that does not exist.
+if grep -q '^dtoverlay=seeed-2mic-voicecard' /boot/firmware/config.txt; then
+    fail "config.txt still names seeed-2mic-voicecard, which no image ships"
+else
+    pass "no stale seeed-2mic-voicecard line"
+fi
 check "I2C is enabled" grep -q '^dtparam=i2c_arm=on' /boot/firmware/config.txt
 
 # Raspberry Pi's own first-boot hook grows the root filesystem to fill the
