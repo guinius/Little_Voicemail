@@ -65,7 +65,9 @@ materials and part links.
 - Raspberry Pi 4 (2 GB), or a **Pi Zero 2 W** for the cheapest build that works
   — signal-cli needs Linux and a modern JVM, which rules out the Pico 2 W and
   the ARMv6 Pi Zero v1.3 (see [HARDWARE.md](HARDWARE.md#choosing-a-board))
-- ReSpeaker 2-Mics Pi HAT v2 — dual far-field mics, onboard amp
+- ReSpeaker 2-Mics Pi HAT v2 — dual far-field mics, onboard amp, TLV320AIC3104
+  codec (driven by a mainline kernel driver plus a device-tree overlay; Seeed's
+  out-of-tree `seeed-voicecard` driver is not used)
 - 3 W 4 Ω speaker
 - 6 × 30 mm illuminated buttons + 1 × 60 mm for push-to-talk
 - 1 × MCP23017 I²C expander (no driver arrays needed at this size)

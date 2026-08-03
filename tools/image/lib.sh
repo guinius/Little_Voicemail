@@ -121,6 +121,7 @@ in_chroot() {
     chroot "$root" env \
         DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C \
         LV_NATIVE="${LV_NATIVE:-0}" \
+        LV_AUDIO_OVERLAY="${LV_AUDIO_OVERLAY:-respeaker-2mic-v2_0}" \
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         "$@"
 }

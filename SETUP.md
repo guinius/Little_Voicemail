@@ -173,8 +173,18 @@ shows some other address, check A0/A1/A2 (pins 15-17) are all tied to GND.
 
 **No sound card**
 `aplay -l` should list `seeed2micvoicec`. The image enables
-`dtoverlay=seeed-2mic-voicecard` already, so if it is missing, the HAT is not
-seated properly. Power off before reseating it.
+`dtoverlay=respeaker-2mic-v2_0` already, so if the card is missing, the HAT is
+usually not seated properly — power off before reseating it.
+
+If you have the older **v1.0** HAT, that is a different codec (WM8960 rather
+than the v2.0's TLV320AIC3104) and it needs a different overlay. Swap the line
+in `/boot/firmware/config.txt` for `dtoverlay=wm8960-soundcard`, which ships
+with Raspberry Pi OS, and reboot.
+
+Ignore any guide — including older versions of this one — telling you to use
+`dtoverlay=seeed-2mic-voicecard`. That belongs to Seeed's out-of-tree driver,
+which broke after kernel 5.10 and which Seeed no longer recommend; the overlay
+does not exist on a stock Raspberry Pi OS, so the line silently does nothing.
 
 **Linking keeps failing**
 Usually the clock. A box that has been unplugged for a long time can be far
