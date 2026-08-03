@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Joining {{ ssid }} &middot; Little Voicemail</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main class="portal-wrap">
+  <h1>Little Voicemail</h1>
+
+  <div class="card">
+    <h2>Joining &ldquo;{{ ssid }}&rdquo;</h2>
+    <div class="banner quiet">
+      This setup network is about to disappear &mdash; that is the sign it worked.
+    </div>
+    <ol>
+      <li>Put your phone back on your normal WiFi.</li>
+      <li>Open <strong>https://{{ hostname }}.local:{{ https_port }}</strong></li>
+      <li>Your browser will warn about the certificate once. Accept it.</li>
+    </ol>
+    <p class="hint">
+      Give it a minute. If the password was wrong, this setup network comes back on
+      its own after about a minute &mdash; rejoin it and try again.
+    </p>
+  </div>
+</main>
+</body>
+</html>

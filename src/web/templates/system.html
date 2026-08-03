@@ -18,7 +18,7 @@
       {% endif %}
     </dd>
     <dt>Signal account</dt>
-    <dd>{{ account or "not linked" }}</dd>
+    <dd>{{ account or "not linked" }} &mdash; <a href="{{ url_for('signal_page') }}">manage</a></dd>
   </dl>
 
   {% if update.error %}

@@ -27,9 +27,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "signal": {
         # The Signal account this device is linked to, in E.164 form.
+        # Written by the Signal page in the web UI, never by hand.
         "account": "",
         "jsonrpc_host": "127.0.0.1",
         "jsonrpc_port": 7583,
+    },
+    "network": {
+        # If the box boots with no network it raises its own access point so
+        # the WiFi can be set from a browser. Without this there is no way
+        # into a screenless box that cannot reach the LAN.
+        "setup_ap": {
+            "enabled": True,
+            "ssid": "Little Voicemail setup",
+            "password": "voicemail",
+            "grace_seconds": 60,
+        },
     },
     # Six slots, always present, indexed 1-6. An unassigned slot has an
     # empty number and is inert: its button does nothing.

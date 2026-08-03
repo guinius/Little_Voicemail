@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set up WiFi &middot; Little Voicemail</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128222;</text></svg>">
+</head>
+<body>
+<main class="portal-wrap">
+  <h1>Little Voicemail</h1>
+
+  {% if error %}
+    <div class="banner error">{{ error }}</div>
+  {% endif %}
+
+  <div class="card">
+    <h2>Choose your WiFi</h2>
+    <p class="hint">
+      This box has no screen, so it needs to be told which network to join. Once it
+      has joined, this setup network disappears and you carry on at
+      <strong>https://{{ hostname }}.local:{{ https_port }}</strong>.
+    </p>
+
+    {% if networks %}
+      <ul class="net-list">
+        {% for net in networks %}
+          <li>
+            <button type="button" class="pick" data-ssid="{{ net.ssid }}" data-secure="{{ '1' if net.secure else '0' }}">
+              {{ net.ssid }}
+              <span class="signal-strength">{{ net.strength }}%{% if not net.secure %} &middot; open{% endif %}</span>
+            </button>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="hint">
+        No networks were found. Type the name in below &mdash; it still works.
+      </p>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('join') }}">
+      <label for="ssid">Network name</label>
+      <input type="text" id="ssid" name="ssid" autocapitalize="off" autocorrect="off"
+             spellcheck="false" required>
+
+      <label for="password" style="margin-top:.7rem">Password</label>
+      <input type="password" id="password" name="password" autocomplete="off"
+             minlength="8" placeholder="leave empty for an open network">
+
+      <div class="toggle" style="margin-top:.6rem">
+        <input type="checkbox" id="hidden" name="hidden">
+        <label for="hidden">This network is hidden</label>
+      </div>
+
+      <div class="actions">
+        <button type="submit">Join this network</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <form method="post" action="{{ url_for('rescan') }}">
+      <p class="hint">
+        Not listed? Scanning needs the radio, so looking again drops this setup
+        network for a few seconds. Your phone should rejoin
+        &ldquo;{{ ap_ssid }}&rdquo; on its own; if it does not, pick it again by hand.
+      </p>
+      <button type="submit" class="btn ghost">Look for networks again</button>
+    </form>
+  </div>
+</main>
+
+<script>
+  document.querySelectorAll('.pick').forEach(function (button) {
+    button.addEventListener('click', function () {
+      document.getElementById('ssid').value = button.dataset.ssid;
+      var password = document.getElementById('password');
+      if (button.dataset.secure === '1') {
+        password.focus();
+      } else {
+        password.value = '';
+      }
+    });
+  });
+</script>
+</body>
+</html>

@@ -13,11 +13,16 @@ Group=voicemail
 # run as the same user.
 Environment=SIGNAL_CLI_CONFIG=/var/lib/little-voicemail/signal-cli
 
+EnvironmentFile=/etc/little-voicemail/signal.env
+# Without an account there is nothing to run, and Restart=always would turn
+# that into a crash loop every ten seconds forever. A failed ExecCondition
+# marks the unit skipped rather than failed and does not trigger a restart,
+# so the unit is safe to leave enabled between unlinking and relinking.
+ExecCondition=/usr/bin/test -n "${SIGNAL_ACCOUNT}"
 ExecStart=/usr/local/bin/signal-cli \
     --config /var/lib/little-voicemail/signal-cli \
     -a ${SIGNAL_ACCOUNT} \
     daemon --tcp 127.0.0.1:7583 --receive-mode on-start
-EnvironmentFile=/etc/little-voicemail/signal.env
 
 Restart=always
 RestartSec=10

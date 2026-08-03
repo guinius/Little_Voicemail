@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#
+# Network control for the setup portal, run through sudo.
+#
+# The portal runs as the unprivileged `voicemail` user but has to scan for
+# WiFi, raise an access point and join a network - all of which need root.
+# Granting `sudo nmcli` would be a very wide grant: nmcli can do a great deal
+# more than this. Instead sudoers allows exactly this script, and this script
+# allows exactly these five verbs.
+#
+#   lv-netctl status
+#   lv-netctl scan
+#   lv-netctl hotspot-up   <ssid> <password>
+#   lv-netctl hotspot-down
+#   lv-netctl join         <ssid> [password] [--hidden]
+#
+set -euo pipefail
+
+HOTSPOT_CON="lv-setup"
+WIFI_CON="lv-wifi"
+IFACE="${LV_WIFI_IFACE:-wlan0}"
+
+die() { printf '%s\n' "$*" >&2; exit 1; }
+
+# Refuse arguments that could be read as nmcli options. Everything here ends
+# up as an nmcli argument, and an SSID beginning with "-" would be one.
+check_value() {
+    local what="$1" value="$2"
+    [[ -n "$value" ]] || die "$what must not be empty"
+    [[ "$value" != -* ]] || die "$what must not start with '-'"
+    [[ "$value" != *$'\n'* ]] || die "$what must not contain a newline"
+}
+
+cmd_status() {
+    # connected / connecting / disconnected, and the SSID if there is one.
+    local state ssid
+    state="$(nmcli -t -f STATE general status 2>/dev/null | head -n1)"
+    ssid="$(nmcli -t -f NAME,TYPE,DEVICE connection show --active 2>/dev/null \
+            | awk -F: '$2 ~ /wireless/ {print $1; exit}')"
+    printf 'state=%s\n' "${state:-unknown}"
+    printf 'ssid=%s\n' "${ssid:-}"
+    printf 'hotspot=%s\n' \
+        "$(nmcli -t -f NAME connection show --active 2>/dev/null \
+           | grep -qx "$HOTSPOT_CON" && echo yes || echo no)"
+    printf 'address=%s\n' \
+        "$(nmcli -t -f IP4.ADDRESS device show "$IFACE" 2>/dev/null \
+           | head -n1 | cut -d: -f2)"
+}
+
+cmd_scan() {
+    # SSID:signal:security, strongest first, blanks and duplicates dropped.
+    nmcli --escape no -t -f SSID,SIGNAL,SECURITY device wifi list --rescan yes \
+        2>/dev/null \
+        | awk -F: 'NF>=2 && $1 != "" && !seen[$1]++' \
+        | sort -t: -k2 -rn
+}
+
+cmd_hotspot_up() {
+    local ssid="$1" password="$2"
+    check_value "SSID" "$ssid"
+    [[ ${#password} -ge 8 ]] || die "the hotspot password must be 8+ characters"
+    nmcli connection delete "$HOTSPOT_CON" >/dev/null 2>&1 || true
+    nmcli device wifi hotspot \
+        ifname "$IFACE" con-name "$HOTSPOT_CON" \
+        ssid "$ssid" password "$password"
+}
+
+cmd_hotspot_down() {
+    nmcli connection down "$HOTSPOT_CON" >/dev/null 2>&1 || true
+    nmcli connection delete "$HOTSPOT_CON" >/dev/null 2>&1 || true
+}
+
+cmd_join() {
+    local ssid="$1" password="${2:-}" hidden="${3:-}"
+    check_value "SSID" "$ssid"
+    [[ -z "$password" || ${#password} -ge 8 ]] \
+        || die "a WPA password must be 8+ characters"
+
+    cmd_hotspot_down
+    nmcli connection delete "$WIFI_CON" >/dev/null 2>&1 || true
+
+    # Build the connection explicitly rather than using `nmcli device wifi
+    # connect`, which cannot see a hidden network and cannot be told about one.
+    nmcli connection add type wifi con-name "$WIFI_CON" ifname "$IFACE" \
+        ssid "$ssid" \
+        connection.autoconnect yes \
+        connection.autoconnect-priority 10 >/dev/null
+
+    if [[ "$hidden" == "--hidden" ]]; then
+        nmcli connection modify "$WIFI_CON" 802-11-wireless.hidden yes >/dev/null
+    fi
+    if [[ -n "$password" ]]; then
+        nmcli connection modify "$WIFI_CON" \
+            wifi-sec.key-mgmt wpa-psk \
+            wifi-sec.psk "$password" >/dev/null
+    fi
+
+    if ! nmcli connection up "$WIFI_CON"; then
+        # Leave nothing half-configured behind: a dead connection profile
+        # would keep NetworkManager from ever retrying cleanly.
+        nmcli connection delete "$WIFI_CON" >/dev/null 2>&1 || true
+        die "could not join '$ssid'"
+    fi
+}
+
+case "${1:-}" in
+    status)        cmd_status ;;
+    scan)          cmd_scan ;;
+    hotspot-up)    cmd_hotspot_up "${2:-}" "${3:-}" ;;
+    hotspot-down)  cmd_hotspot_down ;;
+    join)          cmd_join "${2:-}" "${3:-}" "${4:-}" ;;
+    *)             die "usage: lv-netctl status|scan|hotspot-up|hotspot-down|join" ;;
+esac

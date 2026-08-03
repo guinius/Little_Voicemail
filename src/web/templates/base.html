@@ -16,6 +16,7 @@
     <a href="{{ url_for('contacts') }}" {% if request.endpoint == 'contacts' %}class="active"{% endif %}>Contacts</a>
     <a href="{{ url_for('sounds') }}" {% if request.endpoint == 'sounds' %}class="active"{% endif %}>Sounds</a>
     <a href="{{ url_for('quiet_times') }}" {% if request.endpoint == 'quiet_times' %}class="active"{% endif %}>Quiet&nbsp;times</a>
+    <a href="{{ url_for('signal_page') }}" {% if request.endpoint == 'signal_page' %}class="active"{% endif %}>Signal{% if not signal_linked %}<span class="dot" title="not linked yet"></span>{% endif %}</a>
     <a href="{{ url_for('system') }}" {% if request.endpoint == 'system' %}class="active"{% endif %}>System</a>
     <a href="{{ url_for('logout') }}" class="muted">Log out</a>
   </div>
@@ -25,6 +26,13 @@
 <main class="wrap">
   {% if quiet_now %}
     <div class="banner quiet">Quiet time is active &mdash; the device is asleep.</div>
+  {% endif %}
+
+  {% if session.get('authenticated') and not signal_linked and request.endpoint != 'signal_page' %}
+    <div class="banner error">
+      No Signal account is linked, so nothing can be sent or received yet.
+      <a href="{{ url_for('signal_page') }}">Link one now</a>.
+    </div>
   {% endif %}
 
   {% with messages = get_flashed_messages(with_categories=true) %}

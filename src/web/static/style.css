@@ -153,6 +153,39 @@ table { width: 100%; border-collapse: collapse; font-size: .86rem; }
 th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 600; }
 
+/* ---- signal linking ---- */
+.nav-links .dot {
+  display: inline-block; width: .42rem; height: .42rem; border-radius: 999px;
+  background: var(--err); margin-left: .3rem; vertical-align: middle;
+}
+.btn.big {
+  display: block; text-align: center; font-size: 1.05rem;
+  padding: .95rem 1.1rem; margin-bottom: .5rem;
+}
+.link-step { margin-bottom: 1.2rem; }
+.link-step summary { cursor: pointer; color: var(--accent); font-weight: 700; }
+.uri-row { display: flex; gap: .5rem; }
+.uri-box {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: .78rem; color: var(--muted);
+}
+.qr {
+  display: block; width: 100%; max-width: 260px; margin: .8rem auto 0;
+  background: #fff; border-radius: 8px; padding: .4rem;
+}
+.countdown { color: var(--accent); font-size: .88rem; margin: 0 0 1rem; }
+
+/* ---- wifi setup portal ---- */
+.portal-wrap { max-width: 420px; margin: 2.5rem auto; padding: 0 1rem; }
+.portal-wrap h1 { color: var(--accent); text-align: center; }
+.net-list { list-style: none; padding: 0; margin: 0 0 1rem; }
+.net-list li { border-bottom: 1px solid var(--line); }
+.net-list button {
+  width: 100%; text-align: left; background: transparent; border: none;
+  color: var(--text); font-weight: 600; padding: .6rem .2rem;
+}
+.net-list .signal-strength { float: right; color: var(--muted); font-size: .8rem; font-weight: 400; }
+
 .login-wrap { max-width: 340px; margin: 4rem auto; }
 .login-wrap h1 { text-align: center; color: var(--accent); }
 .login-wrap .card { padding: 1.4rem; }

@@ -1,0 +1,17 @@
+[Unit]
+Description=Little Voicemail first-boot device setup
+# Runs once on the real hardware to do the things a build machine cannot:
+# set the mixer levels for whichever ReSpeaker board is fitted, and pick up a
+# hostname that Raspberry Pi Imager may have set.
+ConditionPathExists=!/var/lib/little-voicemail/.first-boot-done
+After=local-fs.target sound.target
+Before=little-voicemail-web.service little-voicemail.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/lv-first-boot
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

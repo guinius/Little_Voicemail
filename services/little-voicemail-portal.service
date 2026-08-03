@@ -1,0 +1,36 @@
+[Unit]
+Description=Little Voicemail setup portal (WiFi onboarding, http->https)
+After=NetworkManager.service
+Wants=NetworkManager.service
+# Port 80 has one owner. Starting before the web UI keeps the two from
+# racing for the bind on a slow boot.
+Before=little-voicemail-web.service
+
+[Service]
+Type=simple
+User=voicemail
+Group=voicemail
+
+WorkingDirectory=/opt/little-voicemail
+ExecStart=/opt/little-voicemail/.venv/bin/python -m src.web.portal
+Environment=PYTHONUNBUFFERED=1
+Environment=LV_CONFIG=/etc/little-voicemail/config.json
+Environment=LV_DATA_DIR=/var/lib/little-voicemail
+
+# Binding port 80 needs this one capability. Raising the access point and
+# joining a network go through sudo and the lv-netctl helper, which is why
+# NoNewPrivileges has to stay off.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/little-voicemail
+
+[Install]
+WantedBy=multi-user.target

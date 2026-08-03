@@ -10,6 +10,14 @@
     "jsonrpc_host": "127.0.0.1",
     "jsonrpc_port": 7583
   },
+  "network": {
+    "setup_ap": {
+      "enabled": true,
+      "ssid": "Little Voicemail setup",
+      "password": "voicemail",
+      "grace_seconds": 60
+    }
+  },
   "contacts": [
     { "slot": 1, "name": "", "number": "", "enabled": false },
     { "slot": 2, "name": "", "number": "", "enabled": false },
