@@ -31,28 +31,39 @@ signal_name() {
 }
 
 check() {
-    local what="$1" out; shift
+    local what="$1" out trimmed; shift
     # Capture rather than discard: a failing check with no output tells you
     # only that something is wrong, which costs a whole build to diagnose.
     out="$("$@" 2>&1)"
     CHECK_EXIT=$?
     if [[ "$CHECK_EXIT" == "0" ]]; then
         pass "$what"
-    else
-        fail "$what"
-        if [[ -n "$out" ]]; then
-            printf '     %s\n' "${out%%$'\n'*}" >&2
-        elif [[ "$CHECK_EXIT" -ge 128 ]]; then
-            # Bash swallows the shell's own "Segmentation fault" notice
-            # inside a command substitution - it never reaches $out - so an
-            # empty capture at this exit range is the tell, not silence.
-            local name
-            name="$(signal_name "$CHECK_EXIT")"
-            printf '     no output; exit %s (%s)\n' "$CHECK_EXIT" \
-                "${name:-signal $((CHECK_EXIT - 128))}" >&2
-        else
-            printf '     no output; exit %s\n' "$CHECK_EXIT" >&2
-        fi
+        return
+    fi
+    fail "$what"
+
+    if [[ "$CHECK_EXIT" -ge 128 ]]; then
+        # Bash swallows the shell's own "Segmentation fault" notice inside a
+        # command substitution - it never reaches $out - so this exit range
+        # is worth calling out even when real output follows below.
+        local name
+        name="$(signal_name "$CHECK_EXIT")"
+        printf '     exit %s (%s)\n' "$CHECK_EXIT" \
+            "${name:-signal $((CHECK_EXIT - 128))}" >&2
+    fi
+
+    # A crash banner or a stack trace commonly opens with a blank line for
+    # visual separation. An earlier version of this script printed only
+    # "the first line" of $out, which for exactly that shape of output prints
+    # nothing at all and reads as "no output" - hiding the one thing this
+    # check exists to surface. Strip only genuinely leading/trailing blank
+    # lines, then print everything else, capped generously rather than to one
+    # line.
+    trimmed="$(printf '%s' "$out" | sed -e '/./,$!d')"
+    if [[ -n "$trimmed" ]]; then
+        printf '%s\n' "$trimmed" | tail -n 40 | sed 's/^/     /' >&2
+    elif [[ "$CHECK_EXIT" -lt 128 ]]; then
+        printf '     (no output; exit %s)\n' "$CHECK_EXIT" >&2
     fi
 }
 
