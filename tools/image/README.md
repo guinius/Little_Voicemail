@@ -17,7 +17,7 @@ sudo tools/build-image.sh --work-dir /var/tmp/lvbuild --output-dir dist
 Needs root (`losetup`, `mount`, `chroot`), about 12 GB of scratch space, and:
 
 ```bash
-sudo apt install parted e2fsprogs dosfstools zerofree xz-utils rsync curl
+sudo apt install parted fdisk e2fsprogs dosfstools zerofree xz-utils rsync curl
 ```
 
 On x86 it also needs `qemu-user-static` with arm64 binfmt registered. On an
