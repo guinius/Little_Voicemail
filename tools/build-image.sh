@@ -69,7 +69,7 @@ done
 [[ $EUID -eq 0 ]] || die "run this with sudo (it needs losetup, mount and chroot)"
 
 need curl xz parted losetup mount chroot rsync sha256sum truncate
-need e2fsck resize2fs dumpe2fs
+need e2fsck resize2fs dumpe2fs sfdisk
 
 # ------------------------------------------------------------------ qemu
 NEED_QEMU=0
@@ -214,7 +214,20 @@ if [[ "$DO_SHRINK" == "1" ]]; then
     part_end=$(( part_start + fs_sectors - 1 ))
 
     detach_loop
-    parted -s "$IMAGE" unit s resizepart 2 "$part_end"
+    # Not `parted resizepart`: its "Shrinking a partition can cause data
+    # loss, are you sure you want to continue?" confirmation cannot be
+    # satisfied non-interactively - not with -s, not by piping an answer,
+    # not with the undocumented --pretend-input-tty - it always exits 1 with
+    # no stdin attached, confirmed directly against GNU parted 3.6. sfdisk's
+    # dump-edit-reload has no such prompt: take the partition table apart,
+    # rewrite only the root partition's size, and load it back.
+    sfdisk --dump "$IMAGE" > "$WORK_DIR/parttable.txt"
+    awk -v newsize="$fs_sectors" '
+        /: *start=/ { n++; if (n == 2) { sub(/size= *[0-9]+/, "size= " newsize) } }
+        { print }
+    ' "$WORK_DIR/parttable.txt" > "$WORK_DIR/parttable.new.txt"
+    sfdisk --no-reread "$IMAGE" < "$WORK_DIR/parttable.new.txt" >/dev/null \
+        || die "could not rewrite the partition table to shrink it"
     truncate -s $(( (part_end + 1) * 512 )) "$IMAGE"
 
     attach_loop "$IMAGE" >/dev/null

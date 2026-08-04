@@ -39,7 +39,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            parted e2fsprogs dosfstools zerofree xz-utils rsync curl
+            parted fdisk e2fsprogs dosfstools zerofree xz-utils rsync curl
 
       - name: Build
         run: |
