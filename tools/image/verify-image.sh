@@ -11,18 +11,48 @@
 set -uo pipefail
 
 BAD=0
+CHECK_EXIT=0
 pass() { printf '\033[1;32m  ok\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m  !!\033[0m %s\n' "$*" >&2; BAD=1; }
+
+# A process bash reports as killed by signal N exits with 128+N. Turning that
+# back into a name matters here specifically: a failing check with genuinely
+# no output (see `check` below) is exactly what a crash - SIGSEGV, SIGILL,
+# SIGABRT - looks like, and "exit 139" says a lot more than a blank line.
+signal_name() {
+    case "$1" in
+        130) echo "SIGINT" ;;   131) echo "SIGQUIT" ;;
+        132) echo "SIGILL" ;;   133) echo "SIGTRAP" ;;
+        134) echo "SIGABRT" ;;  135) echo "SIGBUS" ;;
+        136) echo "SIGFPE" ;;   137) echo "SIGKILL" ;;
+        139) echo "SIGSEGV" ;;  141) echo "SIGPIPE" ;;
+        *) echo "" ;;
+    esac
+}
 
 check() {
     local what="$1" out; shift
     # Capture rather than discard: a failing check with no output tells you
     # only that something is wrong, which costs a whole build to diagnose.
-    if out="$("$@" 2>&1)"; then
+    out="$("$@" 2>&1)"
+    CHECK_EXIT=$?
+    if [[ "$CHECK_EXIT" == "0" ]]; then
         pass "$what"
     else
         fail "$what"
-        [[ -n "$out" ]] && printf '     %s\n' "${out%%$'\n'*}" >&2
+        if [[ -n "$out" ]]; then
+            printf '     %s\n' "${out%%$'\n'*}" >&2
+        elif [[ "$CHECK_EXIT" -ge 128 ]]; then
+            # Bash swallows the shell's own "Segmentation fault" notice
+            # inside a command substitution - it never reaches $out - so an
+            # empty capture at this exit range is the tell, not silence.
+            local name
+            name="$(signal_name "$CHECK_EXIT")"
+            printf '     no output; exit %s (%s)\n' "$CHECK_EXIT" \
+                "${name:-signal $((CHECK_EXIT - 128))}" >&2
+        else
+            printf '     no output; exit %s\n' "$CHECK_EXIT" >&2
+        fi
     fi
 }
 
@@ -62,6 +92,16 @@ if [[ "${LV_NATIVE:-0}" == "1" ]]; then
         fail "java does not run"
     fi
     check "signal-cli actually starts" /usr/local/bin/signal-cli --version
+    if [[ "$CHECK_EXIT" -ge 128 ]]; then
+        # A crash this early is almost always the native libsignal_jni.so
+        # we just spliced in, and the kernel's own report - exact fault
+        # address, offending library - beats anything userspace can say
+        # about it. Best-effort: some CI sandboxes restrict dmesg, so this
+        # must never be what fails the build.
+        echo "     recent kernel log (looking for the crash):" >&2
+        dmesg 2>/dev/null | tail -30 | sed 's/^/     /' >&2 \
+            || echo "     (dmesg unavailable in this environment)" >&2
+    fi
 else
     echo "  .. skipping the java and signal-cli run checks under emulation"
 fi
