@@ -118,7 +118,18 @@ leave_chroot() {
 
 in_chroot() {
     local root="$1"; shift
-    chroot "$root" env \
+    # env -i, not a plain `env VAR=val`: the latter only adds to whatever the
+    # build host's shell already exports, and it leaks straight through
+    # chroot(1), which does not clear the environment either. That is
+    # exactly how JAVA_HOME=/usr/lib/jvm/temurin-17-jdk-arm64 - a path that
+    # only exists on the GitHub Actions runner, which preinstalls several
+    # JDKs for its own toolchain use - once ended up inside the chroot and
+    # made signal-cli's launcher (which checks JAVA_HOME before PATH) refuse
+    # to start, with every actual Java/signal-cli install step having
+    # succeeded. Listing every var explicitly is what makes this build
+    # reproducible regardless of what the calling shell happens to export.
+    chroot "$root" env -i \
+        HOME=/root \
         DEBIAN_FRONTEND=noninteractive LC_ALL=C LANG=C \
         LV_NATIVE="${LV_NATIVE:-0}" \
         LV_AUDIO_OVERLAY="${LV_AUDIO_OVERLAY:-respeaker-2mic-v2_0}" \
