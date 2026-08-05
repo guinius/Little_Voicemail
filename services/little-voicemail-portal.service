@@ -19,9 +19,14 @@ Environment=LV_DATA_DIR=/var/lib/little-voicemail
 
 # Binding port 80 needs this one capability. Raising the access point and
 # joining a network go through sudo and the lv-netctl helper, which is why
-# NoNewPrivileges has to stay off.
+# NoNewPrivileges has to stay off. CapabilityBoundingSet is deliberately left
+# unset (full set): setting it here would also cap what sudo's re-exec can
+# hold once it escalates to root, and sudo needs CAP_SETUID/CAP_SETGID just
+# to get there in the first place - a bounding set of only
+# CAP_NET_BIND_SERVICE makes every sudo call fail with "unable to change to
+# root gid". The sudoers rule already limits root access to `/sbin/reboot`
+# and the fixed-verb lv-netctl helper, so this is not an open door.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 Restart=always
 RestartSec=5

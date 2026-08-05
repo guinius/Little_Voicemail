@@ -22,8 +22,13 @@ Environment=LV_HTTP_REDIRECT=0
 
 # Applying an update needs to write into the checkout. The capability is kept
 # for installs without the portal, where this process still binds port 80.
+# CapabilityBoundingSet is deliberately left unset (full set): this process
+# also shells out through sudo (signal_link.py, updater.py, app.py - restart,
+# reboot, re-joining WiFi), and capping the bounding set here caps what sudo
+# can escalate to as well, breaking every one of those calls with "unable to
+# change to root gid". The sudoers rule already limits root access to a fixed
+# set of commands, so leaving this unset is not an open door.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 Restart=always
 RestartSec=5
