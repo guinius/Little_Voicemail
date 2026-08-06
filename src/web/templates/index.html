@@ -77,22 +77,41 @@
     </dd>
 
     <dt>Messages waiting</dt>
-    <dd>{{ pending.values() | sum }}</dd>
+    <dd id="messages-waiting">{{ pending.values() | sum }}</dd>
   </dl>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-  document.getElementById('reset-all').addEventListener('click', async () => {
+  document.getElementById('reset-all').addEventListener('click', async (e) => {
     if (!confirm('Clear every waiting message? The lights will go out and the child will not hear them.')) return;
-    const res = await fetch('{{ url_for("reset_queue") }}', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({slot: 'all'})
-    });
-    if (res.ok) location.reload();
-    else alert('Could not clear the queue.');
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const res = await fetch('{{ url_for("reset_queue") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({slot: 'all'}),
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        alert('Could not clear the queue.');
+        return;
+      }
+      // Update the buttons directly rather than trusting a reload to pick
+      // up the change - a cached copy of this page previously left the
+      // glowing ring showing after a successful clear.
+      document.querySelectorAll('.pad .key.waiting').forEach((key) => {
+        key.classList.remove('waiting');
+        const count = key.querySelector('.count');
+        if (count) count.remove();
+      });
+      const total = document.getElementById('messages-waiting');
+      if (total) total.textContent = '0';
+    } finally {
+      btn.disabled = false;
+    }
   });
 </script>
 {% endblock %}

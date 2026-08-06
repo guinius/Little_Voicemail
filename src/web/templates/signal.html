@@ -24,7 +24,22 @@
           <span class="badge err">{{ services['little-voicemail.service'].state }}</span>
         {% endif %}
       </dd>
+      <dt>Connected to Signal</dt>
+      <dd id="svc-connected">
+        {% if status.stale %}
+          <span class="badge err">phone service not running</span>
+        {% elif status.get('signal_connected') %}
+          <span class="badge ok">connected</span>
+        {% else %}
+          <span class="badge err">not connected</span>
+        {% endif %}
+      </dd>
     </dl>
+    <p class="hint">
+      "Running" only means the process is up; "Connected to Signal" is the phone
+      service's actual link to signal-cli, which is what the Status and System
+      pages show too. They can disagree briefly while a service restarts.
+    </p>
     <p class="hint">
       Unlinking stops the phone service and forgets the account on this box. It does
       <em>not</em> remove the device from your phone &mdash; do that in Signal under

@@ -47,6 +47,73 @@
 </main>
 
 <footer class="foot">Little Voicemail v{{ app_version }}</footer>
+{% if session.get('authenticated') %}
+<script>
+  // Diagnostics: a running, timestamped log of every button press and
+  // background request made anywhere in this app, kept in this browser only
+  // (never sent anywhere). Read and copied from the System page - it exists
+  // so a page that "looks wrong" can be turned into a log worth reading
+  // instead of a description of what was clicked.
+  (function () {
+    const KEY = 'lv_diag_log';
+    const MAX_LINES = 400;
+
+    function load() {
+      try { return JSON.parse(localStorage.getItem(KEY) || '[]'); }
+      catch (err) { return []; }
+    }
+    function save(lines) {
+      try { localStorage.setItem(KEY, JSON.stringify(lines.slice(-MAX_LINES))); }
+      catch (err) { /* storage full or unavailable - drop it */ }
+    }
+    function append(line) {
+      const stamp = new Date().toTimeString().slice(0, 8);
+      const lines = load();
+      lines.push(`[${stamp}] ${line}`);
+      save(lines);
+    }
+
+    window.LVDiag = { all: load, clear: () => save([]), log: append };
+
+    append(`-- loaded ${location.pathname} --`);
+
+    const realFetch = window.fetch;
+    window.fetch = function (input, init) {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const method = (init && init.method) || 'GET';
+      const started = performance.now();
+      return realFetch.apply(this, arguments).then(
+        (res) => {
+          append(`fetch ${method} ${url} -> ${res.status} (${Math.round(performance.now() - started)}ms)`);
+          return res;
+        },
+        (err) => {
+          append(`fetch ${method} ${url} -> error: ${err}`);
+          throw err;
+        }
+      );
+    };
+
+    document.addEventListener(
+      'click',
+      (e) => {
+        const el = e.target.closest('button, a.btn');
+        if (!el || el.id === 'diag-copy' || el.id === 'diag-clear') return;
+        const label = (el.id ? '#' + el.id + ' ' : '') + (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+        append(`click: ${label}`);
+      },
+      true
+    );
+
+    window.addEventListener('error', (e) => {
+      append(`JS error: ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`);
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      append(`unhandled rejection: ${e.reason}`);
+    });
+  })();
+</script>
+{% endif %}
 {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -99,6 +99,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   font-weight: 800; font-size: 1.15rem; color: var(--accent);
   text-align: center; padding-bottom: .5rem;
 }
+.pick-contact { margin-top: .4rem; font-size: .78rem; padding: .3rem .6rem; }
 .toggle { display: flex; align-items: center; gap: .4rem; padding-bottom: .55rem; }
 .toggle input { width: 1.05rem; height: 1.05rem; accent-color: var(--accent); }
 .toggle label { margin: 0; }
