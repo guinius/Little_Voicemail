@@ -67,7 +67,10 @@ class ButtonReader:
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
-        if self._expander is not None:
+        # Same reasoning as LedController.start(): a failed hardware probe
+        # still leaves a real (non-responding) expander object here, so this
+        # has to check `_live` too, not just whether one was handed over.
+        if self._live and self._expander is not None:
             self._expander.configure_inputs(BUTTON_MASK, pullup=True, interrupt=False)
         self._task = asyncio.create_task(self._run(), name="button-reader")
 

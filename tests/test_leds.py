@@ -83,6 +83,22 @@ async def test_outputs_idle_high_so_lamps_start_dark():
     assert fake.writes[-1] & LED_MASK == LED_MASK
 
 
+async def test_start_does_not_touch_a_dead_expander():
+    """The regression this guards: Hardware.create() hands over a real but
+    non-responding chip whenever the startup probe fails (no HAT wired up),
+    not a NullBus. Unconditionally writing to it in start() throws OSError
+    and crash-loops the whole service on every box without hardware
+    attached - live_hardware=False has to mean start() leaves the bus alone.
+    """
+    fake = FakeExpander()
+    controller = LedController(fake, live_hardware=False)
+    controller.start()
+    try:
+        assert fake.configured_mask is None
+    finally:
+        await controller.stop()
+
+
 def test_a_lit_lamp_pulls_its_own_pin_low():
     controller = LedController(FakeExpander(), live_hardware=True)
     controller.set(1, solid())
