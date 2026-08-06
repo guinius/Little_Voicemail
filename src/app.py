@@ -71,6 +71,13 @@ class PhoneApp:
         # is held onto so shutdown can wait for it instead of tearing the
         # database out from under a half-finished send.
         self._send_task: asyncio.Task | None = None
+        # The last recording/encode/send failure, so a parent staring at the
+        # System page can see *why* the lamp flashed instead of only that it
+        # did - without going and finding journalctl. Cleared on the next
+        # successful send, not on every attempt, so it survives long enough
+        # to actually be read.
+        self._last_error: str | None = None
+        self._last_error_at: str = ""
 
         signal.on_voice_message = self._on_voice_message
         signal.on_read_receipt = self._on_read_receipt
@@ -253,8 +260,9 @@ class PhoneApp:
             return
         try:
             await self.audio.start_recording()
-        except AudioError:
+        except AudioError as exc:
             log.exception("could not start recording")
+            self._record_error(f"could not start recording: {exc}")
             return
         self.state = State.RECORDING
         self._recording_slot = self.selected_slot
@@ -272,8 +280,9 @@ class PhoneApp:
         self._recording_slot = None
         try:
             recording = await self.audio.stop_recording()
-        except AudioError:
+        except AudioError as exc:
             log.exception("could not stop recording")
+            self._record_error(f"could not stop recording: {exc}")
             self._clear_selection()
             return
 
@@ -304,8 +313,12 @@ class PhoneApp:
                     "sent %.1fs voice note to %s (slot %s)",
                     recording.duration, contact["name"] or contact["number"], slot,
                 )
-            except Exception:
+                self._last_error = None  # a good send outweighs a stale complaint
+            except Exception as exc:
                 log.exception("failed to send voice note to slot %s", slot)
+                self._record_error(
+                    f"send to slot {slot} failed: {type(exc).__name__}: {exc}"
+                )
                 await self._indicate_failure(slot)
             finally:
                 try:
@@ -322,6 +335,11 @@ class PhoneApp:
         self.hw.leds.set(slot, blink(period=0.2, duty=0.5))
         await asyncio.sleep(2.0)
         self.hw.leds.off(slot)
+
+    def _record_error(self, message: str) -> None:
+        """Remember the reason for the last failure, for the System page."""
+        self._last_error = message
+        self._last_error_at = time.strftime("%Y-%m-%d %H:%M:%S")
 
     # -- inbound ---------------------------------------------------------
 
@@ -396,4 +414,6 @@ class PhoneApp:
             ),
             "signal_connected": self.signal.connected,
             "hardware_live": self.hw.live,
+            "last_error": self._last_error,
+            "last_error_at": self._last_error_at or None,
         }

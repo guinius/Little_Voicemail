@@ -18,6 +18,8 @@ import json
 import logging
 import re
 import secrets
+import shutil
+import subprocess
 from functools import wraps
 from pathlib import Path
 
@@ -235,6 +237,7 @@ def create_app(
             account=config.get("signal", "account", default=""),
             status=_device_status(data_dir),
             recent=queue.recent(limit=25),
+            audio_diag=_audio_diagnostics(config),
         )
 
     # -- actions ---------------------------------------------------------
@@ -478,6 +481,41 @@ def _device_status(data_dir: Path) -> dict:
         return status
     except (OSError, json.JSONDecodeError):
         return {"stale": True, "state": "unknown", "signal_connected": False}
+
+
+def _audio_diagnostics(config: Config) -> dict:
+    """Read-only environment checks for the recording/playback pipeline.
+
+    None of this opens an audio device exclusively or writes anything, so
+    it is safe to run on every System page load - the point is to answer
+    "is the plumbing even there" without an SSH session, for whoever is
+    staring at this page trying to figure out why a send failed.
+    """
+    tools = {name: shutil.which(name) is not None
+             for name in ("arecord", "ffmpeg", "ffplay")}
+    return {
+        "tools": tools,
+        "sound_cards": (
+            _run_diag(["arecord", "-l"]) if tools["arecord"]
+            else "arecord is not installed"
+        ),
+        "i2c": (
+            _run_diag(["i2cdetect", "-y", "1"]) if shutil.which("i2cdetect")
+            else None  # not fatal - it's a diagnostic aid, not a dependency
+        ),
+        "input_device": config.get("audio", "input_device", default=""),
+        "output_device": config.get("audio", "output_device", default=""),
+    }
+
+
+def _run_diag(command: list[str], timeout: float = 4.0) -> str:
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout
+        )
+        return (result.stdout + result.stderr).strip() or "(no output)"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"could not run {' '.join(command)}: {exc}"
 
 
 def _session_secret(data_dir: Path) -> bytes:
