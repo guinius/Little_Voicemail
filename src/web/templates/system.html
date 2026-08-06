@@ -52,6 +52,39 @@
     <dt>Buttons &amp; lights</dt>
     <dd>{% if status.get('hardware_live') %}<span class="badge ok">detected</span>{% else %}<span class="badge warn">simulated</span>{% endif %}</dd>
   </dl>
+  {% if status.get('last_error') %}
+    <div class="banner error" style="margin-top:1rem">
+      Last problem{% if status.get('last_error_at') %} ({{ status.get('last_error_at') }}){% endif %}:
+      <br><code>{{ status.get('last_error') }}</code>
+    </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Audio &amp; tools</h2>
+  <p class="hint">
+    Read-only checks - nothing here opens a device or changes anything, so it's
+    safe to reload this page any time you're chasing a recording or sending
+    problem.
+  </p>
+  <dl class="kv">
+    <dt>arecord / ffmpeg / ffplay</dt>
+    <dd>
+      {% for name, present in audio_diag.tools.items() %}
+        <span class="badge {{ 'ok' if present else 'err' }}">{{ name }}{{ '' if present else ' missing' }}</span>
+      {% endfor %}
+    </dd>
+    <dt>Configured input device</dt>
+    <dd><code>{{ audio_diag.input_device }}</code></dd>
+    <dt>Configured output device</dt>
+    <dd><code>{{ audio_diag.output_device }}</code></dd>
+  </dl>
+  <p class="hint">Sound cards ALSA can see (<code>arecord -l</code>):</p>
+  <pre class="log">{{ audio_diag.sound_cards }}</pre>
+  {% if audio_diag.i2c %}
+    <p class="hint">I&sup2;C bus (<code>i2cdetect -y 1</code>) - the ReSpeaker codec should show up here regardless of which hardware branch this is:</p>
+    <pre class="log">{{ audio_diag.i2c }}</pre>
+  {% endif %}
 </div>
 
 <div class="card">

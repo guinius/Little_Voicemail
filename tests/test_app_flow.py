@@ -31,8 +31,14 @@ class FakeAudio:
         self.ringtones = 0
         self.recorded_duration = 3.0
         self.abort_next = False
+        self.fail_next_start = False
 
     async def start_recording(self):
+        if self.fail_next_start:
+            self.fail_next_start = False
+            from src.audio import AudioError
+
+            raise AudioError("arecord: no such device")
         self.recording = True
         return Path("/tmp/fake.wav")
 
@@ -225,6 +231,55 @@ async def test_a_failed_send_does_not_wedge_the_device(env):
 
     assert signal.sent == []
     assert app.state is State.IDLE
+
+
+@pytest.mark.asyncio
+async def test_a_failed_send_is_visible_on_the_status_page(env):
+    """The System page reads status() to show a parent *why* the lamp
+    flashed - a failure that only shows up in journalctl doesn't help
+    someone without an SSH session."""
+    app, _, audio, signal, _ = env
+    signal.fail_next_send = True
+
+    await press(app, 1)
+    await ptt_down(app)
+    await ptt_up(app)
+    await app.wait_for_send()
+
+    status = app.status()
+    assert "signal-cli is down" in status["last_error"]
+    assert status["last_error_at"]
+
+
+@pytest.mark.asyncio
+async def test_a_successful_send_clears_a_previous_error(env):
+    app, _, audio, signal, _ = env
+    signal.fail_next_send = True
+    await press(app, 1)
+    await ptt_down(app)
+    await ptt_up(app)
+    await app.wait_for_send()
+    assert app.status()["last_error"]
+
+    signal.fail_next_send = False
+    await press(app, 1)
+    await ptt_down(app)
+    await ptt_up(app)
+    await app.wait_for_send()
+
+    assert app.status()["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_recording_start_is_also_recorded(env):
+    app, _, audio, _, _ = env
+    audio.fail_next_start = True
+
+    await press(app, 1)
+    await ptt_down(app)
+
+    assert app.state is not State.RECORDING
+    assert "arecord" in app.status()["last_error"]
 
 
 # -- receiving -----------------------------------------------------------

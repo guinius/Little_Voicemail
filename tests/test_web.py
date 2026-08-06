@@ -112,6 +112,16 @@ def test_logout_ends_the_session(client):
     assert client.get("/").status_code == 302
 
 
+def test_system_page_renders_with_no_audio_tools_on_the_box(client):
+    """The dev/test environment has none of arecord/ffmpeg/ffplay/i2cdetect
+    on PATH - the diagnostics have to degrade to "missing", not crash the
+    page a parent is staring at trying to figure out what's wrong."""
+    login(client)
+    response = client.get("/system")
+    assert response.status_code == 200
+    assert b"Audio &amp; tools" in response.data or b"Audio & tools" in response.data
+
+
 def test_saving_a_contact_persists_it(client, paths):
     login(client)
     client.post(
