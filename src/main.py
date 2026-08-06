@@ -97,19 +97,24 @@ async def run(args: argparse.Namespace) -> int:
     )
     for task in pending:
         task.cancel()
+    # Wait for whichever task we just cancelled to actually finish, rather
+    # than calling app.shutdown() again below regardless of how we got
+    # here. runner.run() already tears down hardware and signal-cli itself
+    # in its own `finally` block, on both the cancelled and the
+    # raised-exception path - calling shutdown() a second time here used to
+    # race that teardown (two concurrent GPIO writes, one against pins the
+    # other had already released) rather than actually redoing anything.
+    await asyncio.gather(*pending, return_exceptions=True)
 
-    if runner in done and not runner.cancelled():
+    log.info("shutting down")
+    exit_code = 0
+    if not runner.cancelled():
         exc = runner.exception()
         if exc:
             log.error("phone app stopped with an error", exc_info=exc)
-            await app.shutdown()
-            queue.close()
-            return 1
-
-    log.info("shutting down")
-    await app.shutdown()
+            exit_code = 1
     queue.close()
-    return 0
+    return exit_code
 
 
 def main() -> int:
