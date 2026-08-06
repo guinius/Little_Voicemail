@@ -64,14 +64,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # allowed to reply to that contact (requirement 6).
         "require_listen_before_reply": True,
     },
-    # Three independent windows: school, nap, bedtime. Times are local
-    # "HH:MM" and a window may wrap past midnight.
+    # Three independent windows, generically named - a parent sets each
+    # one's own start/end/days to whatever it's actually for (school run,
+    # nap, bedtime, ...) rather than being locked into a preset meaning.
+    # Times are local "HH:MM" and a window may wrap past midnight.
     "quiet_times": [
-        {"id": "school", "label": "School", "enabled": False,
+        {"id": "school", "label": "Slot 1", "enabled": False,
          "start": "09:00", "end": "15:15", "days": [0, 1, 2, 3, 4]},
-        {"id": "nap", "label": "Nap", "enabled": False,
+        {"id": "nap", "label": "Slot 2", "enabled": False,
          "start": "13:00", "end": "14:30", "days": [0, 1, 2, 3, 4, 5, 6]},
-        {"id": "bedtime", "label": "Bedtime", "enabled": False,
+        {"id": "bedtime", "label": "Slot 3", "enabled": False,
          "start": "19:00", "end": "07:00", "days": [0, 1, 2, 3, 4, 5, 6]},
     ],
     "updates": {
@@ -80,6 +82,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "check_on_load": True,
     },
 }
+
+
+# Quiet-time windows used to ship as preset-named "School"/"Nap"/"Bedtime";
+# they're now generic "Slot 1/2/3" so a parent isn't locked into what each
+# one is for. A box set up before that change keeps its own saved label
+# forever otherwise - quiet_times is a list, and _deep_merge() replaces
+# lists wholesale rather than merging into them - so Config migrates a
+# still-stock legacy label on load and leaves anything customised alone.
+_LEGACY_QUIET_LABELS = {"school": "School", "nap": "Nap", "bedtime": "Bedtime"}
+_QUIET_LABEL_RENAMES = {"school": "Slot 1", "nap": "Slot 2", "bedtime": "Slot 3"}
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -125,7 +137,25 @@ class Config:
                 stored = {}
             self._data = _deep_merge(DEFAULT_CONFIG, stored)
             self._normalise()
+            if self._migrate_quiet_time_labels():
+                self.save()
             return self._data
+
+    def _migrate_quiet_time_labels(self) -> bool:
+        """Rename a still-stock legacy quiet-time label; see the constants
+        above _deep_merge for why this can't just live in DEFAULT_CONFIG."""
+        changed = False
+        for window in self._data.get("quiet_times", []):
+            if not isinstance(window, dict):
+                continue
+            wid = window.get("id")
+            if (
+                wid in _QUIET_LABEL_RENAMES
+                and window.get("label") == _LEGACY_QUIET_LABELS.get(wid)
+            ):
+                window["label"] = _QUIET_LABEL_RENAMES[wid]
+                changed = True
+        return changed
 
     def _normalise(self) -> None:
         """Guarantee six contact slots numbered 1-6, in order."""

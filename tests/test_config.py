@@ -85,6 +85,45 @@ def test_new_defaults_appear_after_an_upgrade(tmp_path):
     assert len(config.contacts()) == NUM_CONTACTS            # rebuilt
 
 
+def test_legacy_quiet_time_labels_are_renamed_on_load(tmp_path):
+    """Boxes set up before the "Slot N" rename keep "School"/"Nap"/"Bedtime"
+    forever otherwise - quiet_times is a list, and the default-merge
+    replaces lists wholesale rather than filling in missing keys."""
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "quiet_times": [
+            {"id": "school", "label": "School", "enabled": True,
+             "start": "09:00", "end": "15:15", "days": [0, 1, 2, 3, 4]},
+            {"id": "nap", "label": "Nap", "enabled": False,
+             "start": "13:00", "end": "14:30", "days": [0, 1, 2, 3, 4, 5, 6]},
+            {"id": "bedtime", "label": "Bedtime", "enabled": False,
+             "start": "19:00", "end": "07:00", "days": [0, 1, 2, 3, 4, 5, 6]},
+        ],
+    }))
+
+    config = Config(path)
+    labels = [w["label"] for w in config.get("quiet_times")]
+    assert labels == ["Slot 1", "Slot 2", "Slot 3"]
+    # Nothing else about the window was touched.
+    assert config.get("quiet_times")[0]["enabled"] is True
+
+    on_disk = json.loads(path.read_text())
+    assert [w["label"] for w in on_disk["quiet_times"]] == ["Slot 1", "Slot 2", "Slot 3"]
+
+
+def test_a_parent_renamed_quiet_time_is_left_alone(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "quiet_times": [
+            {"id": "school", "label": "Piano practice", "enabled": False,
+             "start": "09:00", "end": "15:15", "days": [0, 1, 2, 3, 4]},
+        ],
+    }))
+
+    config = Config(path)
+    assert config.get("quiet_times")[0]["label"] == "Piano practice"
+
+
 def test_corrupt_config_falls_back_instead_of_bricking(tmp_path):
     path = tmp_path / "config.json"
     path.write_text("{ this is not json")
