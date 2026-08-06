@@ -44,6 +44,28 @@ def reader():
         asyncio.set_event_loop(None)
 
 
+class RaisingExpander:
+    """Stands in for a real (non-responding) chip - any I/O should explode."""
+
+    def configure_inputs(self, *args, **kwargs):
+        raise OSError("[Errno 5] Input/output error")
+
+    def read_gpio(self):
+        raise OSError("[Errno 5] Input/output error")
+
+
+async def test_start_does_not_touch_a_dead_expander():
+    """The regression this guards: Hardware.create() hands over a real but
+    non-responding chip whenever the startup probe fails (no HAT wired up),
+    not None. Unconditionally configuring it in start() throws OSError and
+    crash-loops the whole service on every box without hardware attached -
+    live_hardware=False has to mean start() leaves the bus alone.
+    """
+    bad_reader = ButtonReader(expander=RaisingExpander(), live_hardware=False)
+    bad_reader.start()  # must not raise
+    await bad_reader.stop()
+
+
 def drain(reader):
     events = []
     while not reader.events.empty():

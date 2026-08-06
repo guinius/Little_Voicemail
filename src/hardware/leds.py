@@ -84,7 +84,13 @@ class LedController:
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
-        if self._expander is not None:
+        # `_live` matters here, not just whether an expander object exists:
+        # Hardware.create() still hands over a real (non-responding) chip
+        # when the probe at startup fails, so an unconditional write here
+        # throws OSError on every box without the HAT wired up and crash-
+        # loops the whole service. Every other method that touches the bus
+        # already checks `_live` - this one just hadn't.
+        if self._live and self._expander is not None:
             # Lamps are active low, so the pins idle high (all dark).
             self._expander.configure_outputs(LED_MASK, initial=LED_MASK)
         self._task = asyncio.create_task(self._run(), name="led-render")
