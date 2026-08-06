@@ -133,6 +133,47 @@ def test_writes_never_stray_outside_the_lamp_mask():
     assert render(controller) & ~LED_MASK == 0
 
 
+# -- a bad write must not crash the render loop --------------------------
+
+
+class RaisingExpander:
+    """Stands in for a backend whose write_gpio() blows up mid-render."""
+
+    def __init__(self, exc):
+        self._exc = exc
+        self.configured_mask = None
+        self.configured_initial = None
+
+    def configure_outputs(self, mask, initial=0x0000):
+        self.configured_mask = mask
+        self.configured_initial = initial
+
+    def write_gpio(self, value):
+        raise self._exc
+
+
+def test_an_i2c_write_failure_is_swallowed():
+    """The MCP23017 backend's failure mode: a dead I2C bus."""
+    controller = LedController(RaisingExpander(OSError("no such device")),
+                                live_hardware=True)
+    controller.set(1, solid())
+    controller._render(time.monotonic())  # must not raise
+
+
+def test_a_gpio_write_failure_is_swallowed():
+    """The direct-GPIO backend's failure mode instead: RPi.GPIO complains
+    if a pin's hardware state isn't what it expects to be. This is the
+    regression the direct-GPIO branch hit - a RuntimeError here used to
+    propagate straight out of the render loop / shutdown instead of just
+    being logged like the OSError case above."""
+    controller = LedController(
+        RaisingExpander(RuntimeError("The GPIO channel has not been set up as an OUTPUT")),
+        live_hardware=True,
+    )
+    controller.set(1, solid())
+    controller._render(time.monotonic())  # must not raise
+
+
 # -- one chip, two ports ------------------------------------------------
 
 
