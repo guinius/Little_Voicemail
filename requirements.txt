@@ -6,3 +6,9 @@ smbus2>=0.4.3
 # QR code for the Signal linking page. Pure Python, no dependencies of its
 # own, so it installs offline on the Pi and inside the image build.
 segno>=1.6,<2.0
+# TEMPORARY: direct-GPIO branch only, while the MCP23017 is on order. Same
+# import-time fallback pattern as smbus2 above - gpio_direct.open_gpio()
+# catches the ImportError/RuntimeError this raises off-Pi and falls back to
+# simulated hardware, so `pip install` and the test suite still work on a
+# laptop. See src/hardware/gpio_direct.py and HARDWARE.md.
+RPi.GPIO>=0.7.1

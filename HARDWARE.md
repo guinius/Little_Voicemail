@@ -320,6 +320,115 @@ Solder to the ReSpeaker's JST 2.0 speaker pads, or use the 3.5 mm jack into
 a powered speaker if you prefer. The onboard amp gives 1 W into 8 Ω — loud
 enough for a bedroom, not for a garden.
 
+## Testing without the MCP23017
+
+This is a **temporary bench-test variant**, for exercising Signal linking,
+audio, the web UI and everything else while the real MCP23017 is on order.
+It is not a replacement for the design above — see
+["Why the MCP23017 stays"](#why-the-mcp23017-stays) for why the expander is
+the right permanent choice, in particular the current-budget table below,
+which this variant deliberately sits at the edge of.
+
+The `claude/rpi-direct-led-switch-test-pwjan8` branch wires the seven
+switches and seven lamps straight onto the Pi header instead — no expander,
+no I²C for this part of the circuit (the ReSpeaker HAT still needs I²C for
+its own codec). `src/hardware/gpio_direct.py` is a drop-in replacement for
+the MCP23017 driver at the software layer: `buttons.py` and `leds.py` are
+completely unchanged, because both drivers expose the same four methods
+(`configure_inputs`, `configure_outputs`, `read_gpio`, `write_gpio`).
+
+### Checking for clashes with the ReSpeaker HAT first
+
+Before picking pins, everything the HAT itself needs has to be ruled out,
+not just I²C/I²S:
+
+| HAT claim | Pins | Why it's a hard clash |
+|-----------|------|------------------------|
+| I²C | GPIO 2, 3 | Codec control — shared with the expander normally, still needed here |
+| I²S | GPIO 18–21 | Audio to/from the codec |
+| SPI0 | GPIO 7–11 | The HAT's **own onboard RGB LEDs** are wired here. This project never drives them, but a switch or lamp sharing the line with the HAT's own LED driver chip is a real electrical conflict, not just a software one |
+| HAT user button | GPIO 17 | A physical button built into the ReSpeaker board itself is wired to this pin. Reusing it fights that button directly |
+| ID EEPROM | GPIO 0, 1 | Read once at boot to identify the HAT |
+
+That rules out 12 of the Pi's 26 usable pins (2, 3, 7–11, 17, 18–21 — 0 and 1
+were never usable anyway), leaving fourteen: exactly the number needed for
+seven switches and seven lamps, with nothing spare. Getting to fourteen
+means giving up the two pins HARDWARE.md's main design deliberately keeps
+free for a serial console — **GPIO 14/15 (UART) are used here for contact
+buttons 2 and 3**. Disable the serial console before wiring this up
+(`sudo raspi-config` → *Interface Options* → *Serial Port* → login shell
+*No*), or a debounced button read is the least of your problems if
+something is also trying to run a getty on those pins. SSH over WiFi still
+works exactly as normal.
+
+### Pin table
+
+Switches — input, internal pull-up, switch to **GND** (identical wiring to
+the expander's port A, just landing on Pi pins instead of GPA0–6):
+
+| Button | BCM GPIO | Header pin |
+|--------|---------:|-----------:|
+| Contact 1 | GPIO4 | 7 |
+| Contact 2 | GPIO14 | 8 |
+| Contact 3 | GPIO15 | 10 |
+| Contact 4 | GPIO27 | 13 |
+| Contact 5 | GPIO22 | 15 |
+| Contact 6 | GPIO23 | 16 |
+| **Push to talk** | GPIO24 | 18 |
+
+Lamps — output, active low, cathode to the pin, anode to **+5 V** through a
+**470 Ω** resistor (up from the expander's 220 Ω — see the current budget
+below for why):
+
+| Lamp | BCM GPIO | Header pin |
+|------|---------:|-----------:|
+| Contact 1 | GPIO25 | 22 |
+| Contact 2 | GPIO5 | 29 |
+| Contact 3 | GPIO6 | 31 |
+| Contact 4 | GPIO12 | 32 |
+| Contact 5 | GPIO13 | 33 |
+| Contact 6 | GPIO16 | 36 |
+| **Push to talk** | GPIO26 | 37 |
+
+Switches cluster on header pins 7–18, lamps on pins 22–37, so the two looms
+land on opposite ends of the header rather than interleaved — easier to
+keep straight with jumper wires on a breadboard.
+
+### Current budget — this is the part that's tight
+
+The Pi's GPIO is rated ~16 mA per pin and **~50 mA total across all pins at
+once**, versus the MCP23017's 150 mA package limit. At 220 Ω the lamps would
+draw 63–91 mA total, well past that — hence 470 Ω here instead:
+
+| LED colour | Vf | Current at 470 Ω | Seven lamps |
+|------------|---:|------------------:|------------:|
+| White / blue | ~3.0 V | ~4 mA | ~30 mA |
+| Green / yellow | ~2.2 V | ~6 mA | ~42 mA |
+| Red | ~2.0 V | ~6.4 mA | ~45 mA |
+
+Worst case is roughly 45 of the Pi's ~50 mA budget — nearly all of it, with
+the lamps noticeably dimmer than the expander's 220 Ω gives them. That is
+expected, not a fault: it is the tradeoff for losing the expander's separate
+150 mA rail. Do not add anything else to spare GPIO pins on this variant,
+and if lamps flicker or the Pi resets when several light at once, that is
+the GPIO budget or the 5 V rail sagging, not a bug — check those before
+suspecting the code.
+
+Boot-time flicker is also expected here in a way it isn't with the
+expander: GPIO 9–27 default to pull-down at power-on and pins get
+reassigned to ALT functions partway through startup, so lamps wired
+straight to Pi GPIO can flash semi-randomly for the ~20 seconds the Pi
+takes to boot. The expander's outputs are high-Z until the driver
+configures them; direct GPIO has no such guarantee.
+
+### Reverting once the MCP23017 arrives
+
+The only file that changed to make this variant work is
+`src/hardware/__init__.py` (it builds a `gpio_direct.DirectGPIO` instead of
+an `mcp23017.MCP23017`). `mcp23017.py` itself, its tests, and the schematic
+in `hardware/` were left untouched, so switching back is checking out that
+one file from `master` — or just merging this branch's changes back out.
+
 ## Power
 
 The amp dominates here: seven lamps at 220 Ω add at most ~95 mA, but the
@@ -330,6 +439,11 @@ bug — check the supply first.
 The lamps run off the header's **+5 V**, not 3V3, so they do not load the
 Pi's 3.3 V regulator. Only the expander itself sits on 3V3, at under a
 milliamp.
+
+> Running the temporary direct-GPIO variant instead? See
+> ["Testing without the MCP23017"](#testing-without-the-mcp23017) above —
+> its lamps load the Pi's own GPIO budget rather than the expander's, and
+> that budget is the tight constraint there, not the amp.
 
 ## Enclosure
 

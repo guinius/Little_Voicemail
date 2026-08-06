@@ -1,4 +1,15 @@
-"""Hardware abstraction for the Little Voicemail box."""
+"""Hardware abstraction for the Little Voicemail box.
+
+TEMPORARY BRANCH VARIANT: this build runs without the MCP23017 - switches
+and lamps go straight onto the Pi header instead of the expander, because
+the real chip hasn't arrived yet. See gpio_direct.py and HARDWARE.md
+("Testing without the MCP23017") for the pin table and the power-budget
+tradeoffs. buttons.py and leds.py are unchanged; they only ever call the
+four-method interface (configure_inputs/configure_outputs/read_gpio/
+write_gpio) that both mcp23017.MCP23017 and gpio_direct.DirectGPIO
+implement, so swapping the backend here is the only change needed. Revert
+this file to go back to the expander once it arrives.
+"""
 
 from __future__ import annotations
 
@@ -6,14 +17,10 @@ import logging
 from dataclasses import dataclass
 
 from .buttons import PTT, Action, ButtonEvent, ButtonReader
+from .gpio_direct import open_gpio
 from .leds import LedController, blink, solid
-from .mcp23017 import MCP23017, open_bus
 
 log = logging.getLogger(__name__)
-
-# One expander carries the lot: port A reads the seven switches, port B
-# sinks the seven lamps. A0/A1/A2 tied to GND gives 0x20.
-EXPANDER_ADDR = 0x20
 
 __all__ = [
     "PTT",
@@ -29,45 +36,33 @@ __all__ = [
 
 @dataclass
 class Hardware:
-    """Bundles the expander and the readers/controllers on top."""
+    """Bundles the GPIO backend and the readers/controllers on top."""
 
     buttons: ButtonReader
     leds: LedController
     live: bool
-    _bus: object = None
+    _gpio: object = None
 
     @classmethod
-    def create(cls, bus_number: int = 1) -> "Hardware":
-        bus, live = open_bus(bus_number)
-        chip = MCP23017(bus, EXPANDER_ADDR)
-        if live:
-            try:
-                chip.read_gpio()
-            except OSError as exc:
-                log.error(
-                    "MCP23017 not responding at 0x%02X (%s); "
-                    "check wiring and `i2cdetect -y 1`",
-                    EXPANDER_ADDR, exc,
-                )
-                live = False
+    def create(cls) -> "Hardware":
+        gpio, live = open_gpio()
         return cls(
-            buttons=ButtonReader(chip, live_hardware=live),
-            leds=LedController(chip, live_hardware=live),
+            buttons=ButtonReader(gpio, live_hardware=live),
+            leds=LedController(gpio, live_hardware=live),
             live=live,
-            _bus=bus,
+            _gpio=gpio,
         )
 
     def start(self) -> None:
-        # Lamps first: configure_outputs() sets port B idling high (dark)
-        # before the button reader touches port A, so nothing flashes on
-        # the way up. Both calls are read-modify-write, so either order is
-        # safe - this one is just tidier to watch.
+        # Lamps first: configure_outputs() sets the lamp pins idling high
+        # (dark) before the button reader touches the switch pins, so
+        # nothing flashes on the way up.
         self.leds.start()
         self.buttons.start()
 
     async def stop(self) -> None:
         await self.buttons.stop()
         await self.leds.stop()
-        close = getattr(self._bus, "close", None)
+        close = getattr(self._gpio, "close", None)
         if callable(close):
             close()
