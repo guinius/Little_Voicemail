@@ -286,6 +286,7 @@ def create_app(
                 "running": progress.running,
                 "finished": progress.finished,
                 "ok": progress.ok,
+                "rebooting": progress.rebooting,
                 "message": progress.message,
                 "log": progress.log_lines[-12:],
             }

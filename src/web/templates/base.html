@@ -109,7 +109,9 @@
       append(`JS error: ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`);
     });
     window.addEventListener('unhandledrejection', (e) => {
-      append(`unhandled rejection: ${e.reason}`);
+      const reason = e.reason;
+      const detail = reason && reason.stack ? reason.stack.split('\n').slice(0, 3).join(' | ') : reason;
+      append(`unhandled rejection: ${detail}`);
     });
   })();
 </script>
