@@ -217,6 +217,11 @@ def create_app(
             link=linker.snapshot(),
             services=linker.service_states(),
             signal_cli=linker.available,
+            # The systemd unit can say "active" while the phone service's own
+            # JSON-RPC socket to it is down (or vice versa mid-restart) - show
+            # the same live figure the Status and System pages use so the
+            # three don't tell three different stories.
+            status=_device_status(data_dir),
         )
 
     @app.route("/system", methods=["GET"])
@@ -379,6 +384,16 @@ def create_app(
         if not ok:
             return jsonify({"error": detail}), 500
         return jsonify({"ok": True, "parked": detail})
+
+    @app.after_request
+    def _no_cache(response):
+        # Every page here reflects live device state (queued messages, link
+        # status). A browser serving a stale cached copy after an action -
+        # e.g. "Clear all waiting messages" - would look like the action
+        # silently failed, so nothing in this app is cacheable.
+        if request.endpoint != "static":
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
     @app.context_processor
     def inject_globals():

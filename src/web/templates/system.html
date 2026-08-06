@@ -81,10 +81,42 @@
     </table>
   {% endif %}
 </div>
+
+<div class="card">
+  <h2>Diagnostics log</h2>
+  <p class="hint">
+    Every button press and background request across the whole app, kept in this
+    browser only. Go try the thing that isn't working - other pages included -
+    then come back here, copy the log, and paste it back.
+  </p>
+  <pre class="log" id="diag-log"></pre>
+  <div class="actions">
+    <button type="button" class="ghost" id="diag-copy">Copy log</button>
+    <button type="button" class="ghost" id="diag-clear">Clear log</button>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+  const diagBox = document.getElementById('diag-log');
+  function renderDiag() {
+    const lines = window.LVDiag ? window.LVDiag.all() : [];
+    diagBox.textContent = lines.length ? lines.join('\n') : 'Nothing logged yet.';
+    diagBox.scrollTop = diagBox.scrollHeight;
+  }
+  renderDiag();
+  document.getElementById('diag-copy').addEventListener('click', async (e) => {
+    await navigator.clipboard.writeText((window.LVDiag ? window.LVDiag.all() : []).join('\n'));
+    const label = e.currentTarget.textContent;
+    e.currentTarget.textContent = 'Copied';
+    setTimeout(() => { e.currentTarget.textContent = label; }, 2000);
+  });
+  document.getElementById('diag-clear').addEventListener('click', () => {
+    if (window.LVDiag) window.LVDiag.clear();
+    renderDiag();
+  });
+
   const btn = document.getElementById('update-now');
   const logBox = document.getElementById('update-log');
 

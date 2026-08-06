@@ -26,11 +26,14 @@
           <input type="tel" id="number_{{ contact.slot }}" name="number_{{ contact.slot }}"
                  value="{{ contact.number }}" placeholder="+447700900123"
                  pattern="\+[1-9][0-9]{6,14}">
+          <button type="button" class="ghost pick-contact" data-slot="{{ contact.slot }}" hidden>
+            Choose from phone contacts
+          </button>
         </div>
         <div class="toggle">
           <input type="checkbox" id="enabled_{{ contact.slot }}" name="enabled_{{ contact.slot }}"
                  {% if contact.enabled %}checked{% endif %}>
-          <label for="enabled_{{ contact.slot }}">On</label>
+          <label for="enabled_{{ contact.slot }}">Enabled</label>
         </div>
       </div>
     {% endfor %}
@@ -65,6 +68,44 @@
 
 {% block scripts %}
 <script>
+  // "Choose from phone contacts" fills the nickname and number fields from
+  // the browser's own contact list, alongside typing them in by hand. Only
+  // Chrome on Android currently implements this (a secure, HTTPS context is
+  // required too - which this app already is) - everywhere else the button
+  // stays hidden and the text boxes are the only way in.
+  if (navigator.contacts && navigator.contacts.select && window.ContactsManager) {
+    document.querySelectorAll('.pick-contact').forEach((btn) => {
+      btn.hidden = false;
+      btn.addEventListener('click', async () => {
+        const slot = btn.dataset.slot;
+        btn.disabled = true;
+        try {
+          const picked = await navigator.contacts.select(['name', 'tel'], {multiple: false});
+          if (!picked.length) return;
+          const contact = picked[0];
+          const nameInput = document.getElementById('name_' + slot);
+          const numberInput = document.getElementById('number_' + slot);
+          if (contact.name && contact.name.length && !nameInput.value) {
+            nameInput.value = contact.name[0];
+          }
+          if (contact.tel && contact.tel.length) {
+            const digits = (t) => t.replace(/[^\d+]/g, '');
+            const e164 = contact.tel.map(digits).find((t) => /^\+[1-9]\d{6,14}$/.test(t));
+            numberInput.value = e164 || digits(contact.tel[0]);
+          } else {
+            alert('That contact has no phone number saved.');
+          }
+        } catch (err) {
+          // The user cancelling the picker also lands here (AbortError) -
+          // not worth an alert for that one.
+          if (err.name !== 'AbortError') alert('Could not read contacts: ' + err.message);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
   document.querySelectorAll('.reset-slot').forEach(btn => {
     btn.addEventListener('click', async () => {
       const res = await fetch('{{ url_for("reset_queue") }}', {
