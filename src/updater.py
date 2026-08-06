@@ -50,6 +50,10 @@ class UpdateProgress:
     running: bool = False
     finished: bool = False
     ok: bool = False
+    # True only once the reboot command has actually been issued
+    # successfully - distinct from `ok`, which is true as soon as the code
+    # and dependencies are updated, before the reboot is even attempted.
+    rebooting: bool = False
     message: str = ""
     log_lines: list[str] = field(default_factory=list)
 
@@ -205,15 +209,31 @@ class Updater:
             with self._lock:
                 self.progress.ok = False
                 self.progress.message = f"Update failed: {exc}"
-        finally:
-            with self._lock:
-                self.progress.running = False
-                self.progress.finished = True
 
         if self.progress.ok and reboot:
-            # Give the browser a moment to collect the final status.
+            # Give the browser a moment to collect the final status before
+            # the connection drops out from under it - a real reboot kills
+            # this process moments after the command below returns.
             time.sleep(3)
-            self.reboot()
+            if self.reboot():
+                with self._lock:
+                    self.progress.rebooting = True
+            else:
+                # If sudo fails here, it fails silently otherwise: the code
+                # on disk is fully updated but the running process never
+                # restarts, so nothing actually changes until someone
+                # notices the "new" version isn't there and power-cycles the
+                # box themselves.
+                with self._lock:
+                    self.progress.message = (
+                        "Update installed, but the automatic reboot did not "
+                        "start. Power-cycle the device to finish applying it."
+                    )
+                self._log("reboot command failed; the device was not restarted")
+
+        with self._lock:
+            self.progress.running = False
+            self.progress.finished = True
 
     def _step(self, label: str, *command: str) -> None:
         self._log(label)
@@ -252,9 +272,19 @@ class Updater:
             del self.progress.log_lines[:-40]
 
     @staticmethod
-    def reboot() -> None:
+    def reboot() -> bool:
         log.warning("rebooting to complete update")
-        subprocess.run(["sudo", "/sbin/reboot"], check=False)
+        result = subprocess.run(
+            ["sudo", "/sbin/reboot"], capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            log.error(
+                "reboot command failed (exit %s): %s",
+                result.returncode,
+                (result.stderr or result.stdout).strip(),
+            )
+            return False
+        return True
 
 
 class UpdateFailed(RuntimeError):

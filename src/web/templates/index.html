@@ -99,10 +99,12 @@
         alert('Could not clear the queue.');
         return;
       }
-      // Update the buttons directly rather than trusting a reload to pick
+      // Update every button directly rather than trusting a reload to pick
       // up the change - a cached copy of this page previously left the
-      // glowing ring showing after a successful clear.
-      document.querySelectorAll('.pad .key.waiting').forEach((key) => {
+      // glowing ring showing after a successful clear. Unconditional on
+      // purpose: we just cleared everything, so every key loses its
+      // waiting state regardless of what it looked like a moment ago.
+      document.querySelectorAll('.pad .key').forEach((key) => {
         key.classList.remove('waiting');
         const count = key.querySelector('.count');
         if (count) count.remove();

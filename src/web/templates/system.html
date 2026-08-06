@@ -128,9 +128,13 @@
     logBox.textContent = [p.message, ...(p.log || [])].filter(Boolean).join('\n');
     if (p.running) {
       setTimeout(pollProgress, 1500);
-    } else if (p.finished && p.ok) {
+    } else if (p.finished && p.rebooting) {
       logBox.textContent += '\n\nThe device is restarting. This page will not respond ' +
         'for a minute or two — reload it once the lights come back.';
+    } else if (p.finished && p.ok) {
+      // Code and dependencies updated, but the automatic reboot did not
+      // start - the message above already says so. A manual power-cycle
+      // is what finishes this, not clicking the button again.
     } else if (p.finished) {
       btn.disabled = false;
       btn.textContent = 'Update and restart';
