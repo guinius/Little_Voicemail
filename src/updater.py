@@ -215,7 +215,8 @@ class Updater:
             # the connection drops out from under it - a real reboot kills
             # this process moments after the command below returns.
             time.sleep(3)
-            if self.reboot():
+            rebooted, detail = self.reboot()
+            if rebooted:
                 with self._lock:
                     self.progress.rebooting = True
             else:
@@ -223,13 +224,18 @@ class Updater:
                 # on disk is fully updated but the running process never
                 # restarts, so nothing actually changes until someone
                 # notices the "new" version isn't there and power-cycles the
-                # box themselves.
+                # box themselves. Put sudo's own explanation in the visible
+                # log too - "no tty" and "a password is required" need very
+                # different fixes, and this saves an SSH round trip to see
+                # which one it is.
                 with self._lock:
                     self.progress.message = (
                         "Update installed, but the automatic reboot did not "
                         "start. Power-cycle the device to finish applying it."
                     )
                 self._log("reboot command failed; the device was not restarted")
+                if detail:
+                    self._log(detail)
 
         with self._lock:
             self.progress.running = False
@@ -271,20 +277,13 @@ class Updater:
             self.progress.log_lines.append(line)
             del self.progress.log_lines[:-40]
 
-    @staticmethod
-    def reboot() -> bool:
+    def reboot(self) -> tuple[bool, str]:
         log.warning("rebooting to complete update")
-        result = subprocess.run(
-            ["sudo", "/sbin/reboot"], capture_output=True, text=True
-        )
-        if result.returncode != 0:
-            log.error(
-                "reboot command failed (exit %s): %s",
-                result.returncode,
-                (result.stderr or result.stdout).strip(),
-            )
-            return False
-        return True
+        ok, output = self._run("sudo", "/sbin/reboot")
+        output = output.strip()
+        if not ok:
+            log.error("reboot command failed: %s", output)
+        return ok, output
 
 
 class UpdateFailed(RuntimeError):
