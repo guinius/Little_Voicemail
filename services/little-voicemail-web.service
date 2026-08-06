@@ -37,7 +37,13 @@ NoNewPrivileges=false
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/little-voicemail /etc/little-voicemail /opt/little-voicemail
+# /run has to be writable too, not just this unit's own state directories:
+# `sudo /sbin/reboot` runs as root but inherits this process's mount
+# namespace regardless, and reboot's normal sequence clears a stale
+# /run/systemd/reboot-param before it will proceed - ProtectSystem=strict
+# makes that unlink fail with "Read-only file system" otherwise, silently
+# leaving an update installed but never actually applied.
+ReadWritePaths=/var/lib/little-voicemail /etc/little-voicemail /opt/little-voicemail /run
 
 [Install]
 WantedBy=multi-user.target
