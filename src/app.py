@@ -2,6 +2,9 @@
 
 Behaviour, in the order a child experiences it:
 
+  * On startup, once buttons/lights/audio are ready, chime.wav plays once
+    to say the box is awake - unless quiet time is running, in which case
+    it stays silent like everything else during quiet time.
   * Press a contact button. Its lamp lights steady for 30 seconds, then the
     selection lapses back to standby.
   * If that contact has unheard messages, the first press plays them instead
@@ -88,6 +91,7 @@ class PhoneApp:
         self.hw.start()
         self.signal.start()
         self._refresh_leds()
+        await self._play_boot_chime()
         self._tasks = [
             asyncio.create_task(self._button_loop(), name="buttons"),
             asyncio.create_task(self._tick_loop(), name="tick"),
@@ -106,6 +110,26 @@ class PhoneApp:
         await self.wait_for_send(timeout=10.0)
         await self.signal.stop()
         await self.hw.stop()
+
+    async def _play_boot_chime(self) -> None:
+        """A short "I'm awake" chime once startup finishes, so a parent
+        knows the box actually came back up after a power cycle without
+        having to check the web UI. Skipped during quiet time - the whole
+        point of quiet time is that the box stays silent, and a boot chime
+        is exactly the kind of noise a power cut at 2am would otherwise
+        cause. Always chime.wav specifically, not whatever ringtone is
+        configured for messages - this is a distinct "I've booted" signal,
+        not a stand-in for one, so it stays fixed even if a parent changes
+        the message ringtone.
+        """
+        if self.quiet.is_quiet():
+            return
+        chime = self.audio.sounds_dir / "chime.wav"
+        if not chime.exists():
+            log.warning("chime.wav missing from %s; skipping boot chime",
+                       self.audio.sounds_dir)
+            return
+        await self.audio.play(chime)
 
     async def wait_for_send(self, timeout: float = 10.0) -> None:
         """Let an in-flight send finish (or give up) before tearing down."""

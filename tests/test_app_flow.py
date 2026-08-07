@@ -25,7 +25,8 @@ UNCLE = "+447700900456"
 class FakeAudio:
     """Records what would have been recorded, played and sent."""
 
-    def __init__(self):
+    def __init__(self, sounds_dir: Path | None = None):
+        self.sounds_dir = sounds_dir or Path("/tmp/fake-sounds")
         self.recording = False
         self.played: list[str] = []
         self.ringtones = 0
@@ -109,7 +110,10 @@ async def env(tmp_path):
     # The render loop has to be running: flash_all waits on it, and the
     # quiet-time path goes through flash_all.
     hardware.leds.start()
-    audio = FakeAudio()
+    sounds_dir = tmp_path / "sounds"
+    sounds_dir.mkdir()
+    (sounds_dir / "chime.wav").write_bytes(b"RIFF")
+    audio = FakeAudio(sounds_dir=sounds_dir)
     signal = FakeSignal()
     queue = MessageQueue(tmp_path / "messages.db")
     app = PhoneApp(config, hardware, audio, signal, queue)
@@ -131,6 +135,36 @@ async def ptt_down(app):
 
 async def ptt_up(app, duration=3.0):
     await app._handle_button(ButtonEvent(PTT, Action.RELEASE, 0.0, duration))
+
+
+# -- boot chime ------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_boot_chime_plays_when_not_quiet(env):
+    app, _, audio, _, _ = env
+    await app._play_boot_chime()
+    assert audio.played == [str(app.audio.sounds_dir / "chime.wav")]
+
+
+@pytest.mark.asyncio
+async def test_boot_chime_is_skipped_during_quiet_time(env):
+    app, config, audio, _, _ = env
+    enable_quiet_everywhere(config)
+
+    await app._play_boot_chime()
+
+    assert audio.played == []
+
+
+@pytest.mark.asyncio
+async def test_boot_chime_is_skipped_if_the_file_is_missing(env):
+    app, _, audio, _, _ = env
+    (app.audio.sounds_dir / "chime.wav").unlink()
+
+    await app._play_boot_chime()  # must not raise
+
+    assert audio.played == []
 
 
 # -- selection -----------------------------------------------------------
