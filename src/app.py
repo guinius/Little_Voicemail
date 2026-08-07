@@ -322,7 +322,7 @@ class PhoneApp:
                 await self._indicate_failure(slot)
             finally:
                 try:
-                    Path(recording.path).with_suffix(".ogg").unlink(missing_ok=True)
+                    Path(recording.path).with_suffix(".m4a").unlink(missing_ok=True)
                 except OSError:
                     pass
                 self.state = State.IDLE

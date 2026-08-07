@@ -1,35 +1,43 @@
 """Voice note attachment shape.
 
-Regression coverage for a real bug: signal-cli accepts --attachment as
-either a plain file path (content-type guessed from the file) or a
-data: URI with an explicit MIME type. Passing a plain path let the guess
-come back wrong on a minimal headless install, so recipients saw a
-downloadable .ogg file instead of a playable voice-message bubble even
-with voiceNote set. See signal_client.py's _ogg_data_uri().
+Regression coverage for two real bugs found sending to iOS:
+
+  * signal-cli accepts --attachment as either a plain file path
+    (content-type guessed from the file) or a data: URI with an explicit
+    MIME type. Passing a plain path let the guess come back wrong on a
+    minimal headless install, so recipients saw a downloadable file
+    instead of a playable voice-message bubble even with voiceNote set.
+  * Ogg/Opus - the format Signal's own docs point to - doesn't actually
+    play on Signal iOS (signalapp/Signal-iOS#5771, long-standing and
+    unresolved): the bubble showed up but tapping it did nothing. AAC in
+    an M4A container is what both mobile platforms actually record their
+    own voice notes in, so that's what audio.py encodes to now.
+
+See signal_client.py's _m4a_data_uri().
 """
 
 import base64
 
 import pytest
 
-from src.signal_client import SignalClient, _ogg_data_uri
+from src.signal_client import SignalClient, _m4a_data_uri
 
 
-def test_data_uri_is_tagged_audio_ogg(tmp_path):
-    audio = tmp_path / "rec-123.ogg"
-    audio.write_bytes(b"not really opus, just test bytes")
+def test_data_uri_is_tagged_audio_mp4(tmp_path):
+    audio = tmp_path / "rec-123.m4a"
+    audio.write_bytes(b"not really aac, just test bytes")
 
-    uri = _ogg_data_uri(audio)
+    uri = _m4a_data_uri(audio)
 
-    assert uri.startswith("data:audio/ogg;filename=rec-123.ogg;base64,")
+    assert uri.startswith("data:audio/mp4;filename=rec-123.m4a;base64,")
 
 
 def test_data_uri_round_trips_the_file_bytes(tmp_path):
-    audio = tmp_path / "clip.ogg"
+    audio = tmp_path / "clip.m4a"
     payload = bytes(range(256)) * 4  # arbitrary binary content
     audio.write_bytes(payload)
 
-    uri = _ogg_data_uri(audio)
+    uri = _m4a_data_uri(audio)
     encoded = uri.split(",", 1)[1]
 
     assert base64.b64decode(encoded) == payload
@@ -37,11 +45,11 @@ def test_data_uri_round_trips_the_file_bytes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_send_voice_note_sends_a_data_uri_not_a_bare_path(tmp_path):
-    """The actual regression: a bare filesystem path used to go straight
-    into the "attachment" field, leaving signal-cli to guess the
+    """The attachment-shape regression: a bare filesystem path used to go
+    straight into the "attachment" field, leaving signal-cli to guess the
     content-type."""
-    audio = tmp_path / "rec-999.ogg"
-    audio.write_bytes(b"fake opus data")
+    audio = tmp_path / "rec-999.m4a"
+    audio.write_bytes(b"fake aac data")
 
     client = SignalClient(account="+447700900000")
     calls = []
@@ -60,4 +68,4 @@ async def test_send_voice_note_sends_a_data_uri_not_a_bare_path(tmp_path):
     assert params["voiceNote"] is True
     assert params["recipient"] == ["+447700900123"]
     (attachment,) = params["attachment"]
-    assert attachment.startswith("data:audio/ogg;filename=rec-999.ogg;base64,")
+    assert attachment.startswith("data:audio/mp4;filename=rec-999.m4a;base64,")
