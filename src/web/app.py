@@ -36,7 +36,7 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from ..audio import AudioEngine, _playback_env
+from ..audio import LEVELS_SCRIPT, AudioEngine, _playback_env
 from ..config import NUM_CONTACTS, Config
 from ..messages import MessageQueue
 from ..paths import (
@@ -221,6 +221,7 @@ def create_app(
         volume = _clamp_float(
             payload.get("volume", request.form.get("volume")), 0.0, 1.0, 0.8
         )
+        _reapply_levels()
         path = sounds_dir / name
         try:
             result = subprocess.run(
@@ -563,6 +564,30 @@ def _run_diag(command: list[str], timeout: float = 4.0) -> str:
         return (result.stdout + result.stderr).strip() or "(no output)"
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"could not run {' '.join(command)}: {exc}"
+
+
+def _reapply_levels() -> None:
+    """Best-effort re-run of set-audio-levels.sh before a preview play.
+
+    Mirrors AudioEngine._reapply_levels() in audio.py - this route plays
+    through a separate subprocess call rather than through AudioEngine, so
+    it needs its own copy rather than sharing that one. See LEVELS_SCRIPT's
+    docstring in audio.py for why this has to happen around every use
+    rather than just once at boot.
+    """
+    if not LEVELS_SCRIPT.exists():
+        return
+    try:
+        result = subprocess.run(
+            [str(LEVELS_SCRIPT)], capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            log.warning(
+                "set-audio-levels.sh exited %s: %s",
+                result.returncode, (result.stdout + result.stderr).strip()[-300:],
+            )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.warning("could not reapply audio levels: %s", exc)
 
 
 def _session_secret(data_dir: Path) -> bytes:

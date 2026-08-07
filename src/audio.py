@@ -24,10 +24,20 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .paths import PROJECT_ROOT
+
 log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 48000
 AAC_BITRATE = "48k"
+# See tools/set-audio-levels.sh. The ReSpeaker codec doesn't just default to
+# quiet at boot - it appears to reset its own playback/capture volume
+# registers back to those defaults whenever its analog stage powers back up
+# after being idle (a DAPM power-management pattern common to ASoC codecs),
+# so a level fixed once at boot can go quietly missing again hours into
+# real use. Cheapest reliable fix is reapplying it around every actual use
+# rather than chasing the exact codec behaviour that causes it.
+LEVELS_SCRIPT = PROJECT_ROOT / "tools" / "set-audio-levels.sh"
 
 
 class AudioError(RuntimeError):
@@ -69,6 +79,49 @@ class AudioEngine:
     def min_record_seconds(self) -> float:
         return float(self._config.get("audio", "min_record_seconds", default=0.7))
 
+    # -- levels ------------------------------------------------------------
+
+    async def _reapply_levels(self) -> None:
+        """Best-effort re-run of set-audio-levels.sh before touching real
+        hardware. Never raises: a failure here should not stop a recording
+        or a playback from being attempted, just leave the mic/speaker at
+        whatever level the codec happened to reset itself to."""
+        if not LEVELS_SCRIPT.exists():
+            return
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(LEVELS_SCRIPT),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError as exc:
+            log.warning("could not reapply audio levels: %s", exc)
+            return
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            # Don't leave it running - a script that hangs once is liable to
+            # hang every time, and this runs before every recording/
+            # playback, so a leaked process here would pile up fast.
+            proc.kill()
+            try:
+                # kill() alone isn't enough of a guarantee here: a process
+                # with stdout=PIPE that communicate() never finished
+                # draining can leave Process.wait() hanging indefinitely
+                # even after the kill, regardless of the process actually
+                # being dead - bound this wait too rather than trust it to
+                # return promptly.
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass  # best-effort cleanup; not worth blocking on further
+            log.warning("set-audio-levels.sh timed out; killed it")
+            return
+        if proc.returncode != 0:
+            log.warning(
+                "set-audio-levels.sh exited %s: %s",
+                proc.returncode, out.decode(errors="replace").strip()[-300:],
+            )
+
     # -- recording -------------------------------------------------------
 
     async def start_recording(self) -> Path:
@@ -76,6 +129,7 @@ class AudioEngine:
         if self._record_proc is not None:
             raise AudioError("a recording is already running")
         _require("arecord")
+        await self._reapply_levels()
         target = self.work_dir / f"rec-{int(time.time() * 1000)}.wav"
         # -d caps the capture so a jammed button cannot record forever
         # (requirement 4); arecord exits cleanly on its own at the limit.
@@ -173,6 +227,7 @@ class AudioEngine:
             log.error("ffplay not installed; cannot play audio")
             return False
         async with self._play_lock:
+            await self._reapply_levels()
             proc = await asyncio.create_subprocess_exec(
                 "ffplay", "-nodisp", "-autoexit", "-loglevel", "error",
                 "-volume", str(int(max(0.0, min(1.0, volume)) * 100)),
