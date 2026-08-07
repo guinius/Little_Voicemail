@@ -60,6 +60,11 @@ class AudioEngine:
         self._record_proc: asyncio.subprocess.Process | None = None
         self._playback_proc: asyncio.subprocess.Process | None = None
         self._play_lock = asyncio.Lock()
+        # Holds whichever _reapply_levels() call is currently in flight, so
+        # it isn't garbage collected mid-run (asyncio only keeps a weak
+        # reference to a bare create_task() result) - not awaited on by
+        # anything, see _kick_off_levels_reapply().
+        self._levels_task: asyncio.Task | None = None
 
     # -- settings --------------------------------------------------------
 
@@ -122,6 +127,29 @@ class AudioEngine:
                 proc.returncode, out.decode(errors="replace").strip()[-300:],
             )
 
+    def _kick_off_levels_reapply(self) -> None:
+        """Start _reapply_levels() in the background rather than awaiting
+        it inline.
+
+        It used to be awaited before every recording/playback, which
+        sounded right - fix the levels, then use the hardware - but
+        set-audio-levels.sh takes a real 1-3s (it does ~15-20 amixer round
+        trips), and the button loop processes one event at a time. That
+        delay sat in front of the PTT lamp lighting and the actual arecord
+        launch, so a normal quick press-and-release finished before
+        start_recording() had even returned: the release got queued,
+        then fired the instant the delayed start finally completed,
+        stopping a recording milliseconds old - under min_record_seconds,
+        so it was silently discarded with no lamp having lit at all.
+        Looked exactly like a dead button.
+
+        Backgrounding it accepts a small chance the very first moment of a
+        recording/playback happens at the previous levels rather than
+        freshly-reapplied ones, which is a far smaller cost than blocking
+        the button/lamp response for seconds.
+        """
+        self._levels_task = asyncio.create_task(self._reapply_levels())
+
     # -- recording -------------------------------------------------------
 
     async def start_recording(self) -> Path:
@@ -129,7 +157,7 @@ class AudioEngine:
         if self._record_proc is not None:
             raise AudioError("a recording is already running")
         _require("arecord")
-        await self._reapply_levels()
+        self._kick_off_levels_reapply()
         target = self.work_dir / f"rec-{int(time.time() * 1000)}.wav"
         # -d caps the capture so a jammed button cannot record forever
         # (requirement 4); arecord exits cleanly on its own at the limit.
@@ -227,7 +255,7 @@ class AudioEngine:
             log.error("ffplay not installed; cannot play audio")
             return False
         async with self._play_lock:
-            await self._reapply_levels()
+            self._kick_off_levels_reapply()
             proc = await asyncio.create_subprocess_exec(
                 "ffplay", "-nodisp", "-autoexit", "-loglevel", "error",
                 "-volume", str(int(max(0.0, min(1.0, volume)) * 100)),
