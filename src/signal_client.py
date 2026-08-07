@@ -19,6 +19,7 @@ Requires signal-cli >= 0.14.2, which added `--voice-note` / `voiceNote`.
 from __future__ import annotations
 
 import asyncio
+import base64
 import itertools
 import json
 import logging
@@ -309,7 +310,7 @@ class SignalClient:
             "send",
             {
                 "recipient": [recipient],
-                "attachment": [str(audio_path)],
+                "attachment": [_ogg_data_uri(audio_path)],
                 "voiceNote": True,
             },
             timeout=120.0,  # uploading over a slow link can take a while
@@ -351,3 +352,23 @@ class SignalClient:
         if isinstance(result, dict):
             return str(result.get("version", "unknown"))
         return str(result)
+
+
+def _ogg_data_uri(path: Path) -> str:
+    """RFC 2397 data URI for `path`, tagged explicitly as audio/ogg.
+
+    A plain filesystem path also works as an --attachment value, but then
+    signal-cli has to guess the content-type from the file itself, and that
+    guess is not reliable enough on a minimal headless Debian install: it
+    can come back generic, and a generic content-type is exactly what makes
+    a Signal client show a downloadable file instead of a voice-message
+    bubble, even with voiceNote set. Spelling the type out here sidesteps
+    the guess entirely - see signal-cli's own --attachment docs for the
+    data: URI form.
+
+    Voice notes are capped at a minute and stay under ~200 kB (see audio.py),
+    so reading the whole thing into memory to base64-encode it costs nothing
+    worth avoiding - well under what one JSON-RPC round trip already costs.
+    """
+    payload = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:audio/ogg;filename={path.name};base64,{payload}"
