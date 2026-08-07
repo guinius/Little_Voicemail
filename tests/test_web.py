@@ -203,6 +203,27 @@ def test_ringtone_selection_saves(client, paths):
     assert config.get("audio", "ringtone_volume") == 0.5
 
 
+def test_preview_requires_login(client):
+    response = client.post("/api/sounds/preview", json={"name": "chime.wav"})
+    assert response.status_code == 401
+
+
+def test_preview_rejects_an_unknown_ringtone(client):
+    login(client)
+    response = client.post("/api/sounds/preview", json={"name": "nope.wav"})
+    assert response.status_code == 400
+    assert "Unknown ringtone" in response.get_json()["error"]
+
+
+def test_preview_fails_gracefully_with_no_ffplay(client):
+    """The dev/test box has no ffplay on PATH - same as a fresh Pi before
+    install.sh runs. The route has to say so, not 500 with a traceback."""
+    login(client)
+    response = client.post("/api/sounds/preview", json={"name": "chime.wav"})
+    assert response.status_code == 500
+    assert "ffplay" in response.get_json()["error"]
+
+
 def test_first_run_sets_a_password_and_leads_to_linking(tmp_path):
     config_path = tmp_path / "config.json"
     Config(config_path)  # no password yet

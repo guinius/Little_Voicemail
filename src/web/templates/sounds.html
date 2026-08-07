@@ -29,8 +29,10 @@
       </div>
 
       <div class="actions">
+        <button type="button" class="ghost" id="preview">Play on device</button>
         <button type="submit">Save</button>
       </div>
+      <p class="hint" id="preview-status" hidden></p>
     </form>
   {% endif %}
 </div>
@@ -43,6 +45,37 @@
     const label = document.getElementById('vol-label');
     slider.addEventListener('input', () => {
       label.textContent = Math.round(slider.value * 100) + '%';
+    });
+  }
+
+  const previewBtn = document.getElementById('preview');
+  const previewStatus = document.getElementById('preview-status');
+  if (previewBtn) {
+    previewBtn.addEventListener('click', async () => {
+      const ringtone = document.getElementById('ringtone');
+      previewBtn.disabled = true;
+      previewStatus.hidden = false;
+      previewStatus.textContent = 'Playing through the device speaker...';
+      try {
+        const res = await fetch('{{ url_for("preview_sound") }}', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            name: ringtone.value,
+            volume: slider ? slider.value : 0.8,
+          }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          previewStatus.textContent = 'Could not play: ' + (body.error || res.statusText);
+        } else {
+          previewStatus.textContent = 'Played "' + ringtone.value + '" on the device speaker.';
+        }
+      } catch (err) {
+        previewStatus.textContent = 'Could not play: ' + err;
+      } finally {
+        previewBtn.disabled = false;
+      }
     });
   }
 </script>

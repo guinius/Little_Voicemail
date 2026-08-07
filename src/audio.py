@@ -142,6 +142,11 @@ class AudioEngine:
             "ffmpeg", "-nostdin", "-y",
             "-i", str(wav_path),
             "-ac", "1",
+            # A far-field mic picking up a child at an unpredictable
+            # distance produces uneven levels - dynaudnorm adaptively boosts
+            # quiet stretches frame by frame instead of one flat gain, which
+            # would either leave quiet parts quiet or clip the loud ones.
+            "-af", "dynaudnorm",
             "-c:a", "aac",
             "-b:a", AAC_BITRATE,
             str(target),

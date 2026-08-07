@@ -36,7 +36,7 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from ..audio import AudioEngine
+from ..audio import AudioEngine, _playback_env
 from ..config import NUM_CONTACTS, Config
 from ..messages import MessageQueue
 from ..paths import (
@@ -192,6 +192,53 @@ def create_app(
             current=config.get("audio", "ringtone", default=""),
             volume=config.get("audio", "ringtone_volume", default=0.8),
         )
+
+    @app.route("/api/sounds/preview", methods=["POST"])
+    @login_required
+    def preview_sound():
+        """Play a ringtone through the device's own speaker, right now.
+
+        Deliberately not an in-browser <audio> tag: the point of a preview
+        button here is confirming the actual hardware speaker works, which
+        an in-browser player can't tell you - it would only prove the file
+        itself decodes fine on whatever device the parent is browsing from.
+        This shells out to ffplay against the configured output_device, the
+        same path a real ringtone or incoming message takes, so a parent
+        gets a genuine end-to-end check.
+
+        Blocking is deliberate too: cheroot serves requests on a thread
+        pool, so one short (a few seconds, at most) synchronous ffplay call
+        doesn't stall the rest of the UI for other requests.
+        """
+        payload = request.get_json(silent=True) or {}
+        name = payload.get("name") or request.form.get("name", "")
+        available = audio.available_ringtones()
+        if name not in available:
+            return jsonify({"error": "Unknown ringtone."}), 400
+        if not shutil.which("ffplay"):
+            return jsonify({"error": "ffplay is not installed."}), 500
+
+        volume = _clamp_float(
+            payload.get("volume", request.form.get("volume")), 0.0, 1.0, 0.8
+        )
+        path = sounds_dir / name
+        try:
+            result = subprocess.run(
+                [
+                    "ffplay", "-nodisp", "-autoexit", "-loglevel", "error",
+                    "-volume", str(int(volume * 100)),
+                    str(path),
+                ],
+                capture_output=True, text=True, timeout=70,
+                env=_playback_env(audio.output_device),
+            )
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "Playback timed out."}), 500
+        if result.returncode != 0:
+            detail = result.stderr.strip()[-300:] or "playback failed"
+            log.warning("sound preview of %s failed: %s", name, detail)
+            return jsonify({"error": detail}), 500
+        return jsonify({"ok": True})
 
     @app.route("/quiet-times", methods=["GET", "POST"])
     @login_required
