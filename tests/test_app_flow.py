@@ -116,7 +116,14 @@ async def env(tmp_path):
     audio = FakeAudio(sounds_dir=sounds_dir)
     signal = FakeSignal()
     queue = MessageQueue(tmp_path / "messages.db")
-    app = PhoneApp(config, hardware, audio, signal, queue)
+    # Not part of the fixture's yielded tuple to avoid reshaping every
+    # existing test's unpacking - tests that need it reach app._test_mode_
+    # flag_path directly, same as other "private" state already used
+    # throughout this file (app.selected_slot, app._selection_expires, ...).
+    app = PhoneApp(
+        config, hardware, audio, signal, queue,
+        test_mode_flag_path=tmp_path / "test_mode.flag",
+    )
     try:
         yield app, config, audio, signal, queue
     finally:
@@ -165,6 +172,133 @@ async def test_boot_chime_is_skipped_if_the_file_is_missing(env):
     await app._play_boot_chime()  # must not raise
 
     assert audio.played == []
+
+
+# -- button test mode -------------------------------------------------------
+
+
+def test_creating_the_flag_file_enters_test_mode(env):
+    app, *_ = env
+    app._test_mode_flag_path.write_text("", encoding="utf-8")
+
+    app._poll_test_mode(now=1000.0)
+
+    assert app._test_mode is True
+
+
+def test_removing_the_flag_file_exits_test_mode(env):
+    app, *_ = env
+    app._test_mode_flag_path.write_text("", encoding="utf-8")
+    app._poll_test_mode(now=1000.0)
+
+    app._test_mode_flag_path.unlink()
+    app._poll_test_mode(now=1001.0)
+
+    assert app._test_mode is False
+
+
+def test_entering_test_mode_clears_an_existing_selection(env):
+    app, *_ = env
+    app._select(1)
+
+    app._test_mode_flag_path.write_text("", encoding="utf-8")
+    app._poll_test_mode(now=1000.0)
+
+    assert app.selected_slot is None
+    assert app.state is State.IDLE
+
+
+@pytest.mark.asyncio
+async def test_a_press_in_test_mode_lights_only_its_own_lamp(env):
+    app, *_ = env
+    app._test_mode_flag_path.write_text("", encoding="utf-8")
+    app._poll_test_mode(now=1000.0)
+
+    await press(app, 3)
+
+    assert app.hw.leds._patterns[3].kind == "solid"
+    for other in (1, 2, 4, 5, 6):
+        assert app.hw.leds._patterns[other].kind == "off"
+    assert app.hw.leds._patterns[PTT].kind == "off"
+
+
+@pytest.mark.asyncio
+async def test_a_press_in_test_mode_does_not_select_or_play_pending(env):
+    app, _, audio, _, queue = env
+    queue.add(slot=1, sender=GRANDMA, signal_ts=1, attachment="/tmp/in.ogg")
+    app._test_mode_flag_path.write_text("", encoding="utf-8")
+    app._poll_test_mode(now=1000.0)
+
+    await press(app, 1)
+
+    assert app.selected_slot is None
+    assert audio.played == []  # normal "listen before reply" never ran
+
+
+@pytest.mark.asyncio
+async def test_ptt_in_test_mode_does_not_record_or_send(env):
+    app, _, audio, signal, _ = env
+    app._test_mode_flag_path.write_text("", encoding="utf-8")
+    app._poll_test_mode(now=1000.0)
+
+    await ptt_down(app)
+    await ptt_up(app)
+    await app.wait_for_send()
+
+    assert not audio.recording
+    assert signal.sent == []
+    assert app.hw.leds._patterns[PTT].kind == "off"  # released
+
+
+@pytest.mark.asyncio
+async def test_test_mode_records_the_last_action_per_button(env):
+    app, *_ = env
+    app._test_mode_flag_path.write_text("", encoding="utf-8")
+    app._poll_test_mode(now=1000.0)
+
+    await press(app, 2)
+
+    events = {row["slot"]: row for row in app.status()["test_events"]}
+    assert events[2]["action"] == "press"
+    assert events[2]["at"]
+    assert events[1]["action"] is None  # untouched button still shows blank
+
+
+def test_test_mode_auto_expires_after_the_safety_timeout(env):
+    from src.app import TEST_MODE_MAX_SECONDS
+
+    app, *_ = env
+    app._test_mode_flag_path.write_text("", encoding="utf-8")
+    app._poll_test_mode(now=1000.0)
+    assert app._test_mode is True
+
+    app._poll_test_mode(now=1000.0 + TEST_MODE_MAX_SECONDS + 1)
+
+    assert app._test_mode is False
+    assert not app._test_mode_flag_path.exists()  # web UI's toggle reflects it too
+
+
+@pytest.mark.asyncio
+async def test_a_stale_flag_file_from_a_previous_run_does_not_survive_startup(env):
+    """The flag file is how the web process tells this one test mode
+    should be on - but a leftover from an unclean previous exit (crash,
+    power cut) must not make a fresh boot come up already in test mode
+    with no parent watching. Exercises run() itself, not just the unlink
+    call in isolation, since what matters is that the cleanup is actually
+    wired into startup."""
+    app, *_ = env
+    app._test_mode_flag_path.write_text("", encoding="utf-8")
+
+    task = asyncio.create_task(app.run())
+    try:
+        await asyncio.sleep(0)  # let run() reach past its startup cleanup
+        assert not app._test_mode_flag_path.exists()
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 # -- selection -----------------------------------------------------------

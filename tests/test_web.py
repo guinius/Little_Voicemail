@@ -74,7 +74,8 @@ def login(client):
 
 
 @pytest.mark.parametrize(
-    "path", ["/", "/contacts", "/sounds", "/quiet-times", "/signal", "/system"]
+    "path",
+    ["/", "/contacts", "/sounds", "/quiet-times", "/signal", "/system", "/button-test"],
 )
 def test_pages_require_a_password(client, path):
     response = client.get(path)
@@ -120,6 +121,57 @@ def test_system_page_renders_with_no_audio_tools_on_the_box(client):
     response = client.get("/system")
     assert response.status_code == 200
     assert b"Audio &amp; tools" in response.data or b"Audio & tools" in response.data
+
+
+def test_button_test_page_renders(client):
+    login(client)
+    response = client.get("/button-test")
+    assert response.status_code == 200
+    assert b"Button test" in response.data
+
+
+def test_starting_button_test_creates_the_flag_file(client, paths):
+    login(client)
+    _, data_dir, _ = paths
+    flag = data_dir / "test_mode.flag"
+    assert not flag.exists()
+
+    response = client.post("/api/button-test/start")
+
+    assert response.status_code == 200
+    assert response.get_json()["active"] is True
+    assert flag.exists()
+
+
+def test_stopping_button_test_removes_the_flag_file(client, paths):
+    login(client)
+    _, data_dir, _ = paths
+    flag = data_dir / "test_mode.flag"
+    client.post("/api/button-test/start")
+    assert flag.exists()
+
+    response = client.post("/api/button-test/stop")
+
+    assert response.status_code == 200
+    assert response.get_json()["active"] is False
+    assert not flag.exists()
+
+
+def test_button_test_page_reflects_the_flag_file_on_load(client, paths):
+    login(client)
+    _, data_dir, _ = paths
+    (data_dir / "test_mode.flag").parent.mkdir(parents=True, exist_ok=True)
+    (data_dir / "test_mode.flag").write_text("", encoding="utf-8")
+
+    response = client.get("/button-test")
+
+    assert response.status_code == 200
+    assert b"Stop test mode" in response.data
+
+
+def test_button_test_apis_require_login(client):
+    assert client.post("/api/button-test/start").status_code == 401
+    assert client.post("/api/button-test/stop").status_code == 401
 
 
 def test_saving_a_contact_persists_it(client, paths):
