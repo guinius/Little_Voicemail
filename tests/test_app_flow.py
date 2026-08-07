@@ -53,7 +53,7 @@ class FakeAudio:
         )
 
     async def encode_voice_note(self, path):
-        return Path("/tmp/fake.ogg")
+        return Path("/tmp/fake.m4a")
 
     async def play(self, path, volume=1.0):
         self.played.append(str(path))
@@ -182,7 +182,7 @@ async def test_full_send_flow(env):
     await ptt_up(app)
     await app.wait_for_send()
 
-    assert signal.sent == [(GRANDMA, "/tmp/fake.ogg")]
+    assert signal.sent == [(GRANDMA, "/tmp/fake.m4a")]
     assert app.selected_slot is None  # selection released after sending
 
 

@@ -310,7 +310,7 @@ class SignalClient:
             "send",
             {
                 "recipient": [recipient],
-                "attachment": [_ogg_data_uri(audio_path)],
+                "attachment": [_m4a_data_uri(audio_path)],
                 "voiceNote": True,
             },
             timeout=120.0,  # uploading over a slow link can take a while
@@ -354,8 +354,8 @@ class SignalClient:
         return str(result)
 
 
-def _ogg_data_uri(path: Path) -> str:
-    """RFC 2397 data URI for `path`, tagged explicitly as audio/ogg.
+def _m4a_data_uri(path: Path) -> str:
+    """RFC 2397 data URI for `path`, tagged explicitly as audio/mp4.
 
     A plain filesystem path also works as an --attachment value, but then
     signal-cli has to guess the content-type from the file itself, and that
@@ -366,9 +366,13 @@ def _ogg_data_uri(path: Path) -> str:
     the guess entirely - see signal-cli's own --attachment docs for the
     data: URI form.
 
-    Voice notes are capped at a minute and stay under ~200 kB (see audio.py),
+    audio/mp4 (not audio/aac) because audio.py encodes to AAC inside an M4A
+    container, not a bare AAC stream - audio/mp4 is the container's actual
+    MIME type.
+
+    Voice notes are capped at a minute and stay under ~1 MB (see audio.py),
     so reading the whole thing into memory to base64-encode it costs nothing
     worth avoiding - well under what one JSON-RPC round trip already costs.
     """
     payload = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:audio/ogg;filename={path.name};base64,{payload}"
+    return f"data:audio/mp4;filename={path.name};base64,{payload}"

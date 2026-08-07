@@ -1,9 +1,15 @@
 """Recording, encoding and playback.
 
 Recording uses `arecord` straight to WAV, then ffmpeg transcodes to mono
-Ogg/Opus at 24 kbps - the format Signal's own clients use for voice notes,
-which keeps a minute of speech under 200 kB and renders with the waveform
-and playback-speed controls rather than as a generic file attachment.
+AAC in an M4A container at 48 kbps - the format both Signal's iOS and
+Android apps actually record their own voice notes in. Ogg/Opus looks like
+the more obvious choice (lower bitrate, Signal's own docs mention it,
+Android and Desktop play it fine) and was tried first, but Signal iOS has a
+longstanding, unresolved bug where Opus voice attachments from other
+platforms just don't play (signalapp/Signal-iOS#5771) - the recording shows
+up but tapping it does nothing. AAC/M4A is what actually round-trips to
+every client, which matters more here than the extra bitrate costs: a
+minute of speech is still well under a megabyte.
 
 Playback goes through ffplay so that whatever a parent's phone sends -
 AAC from iOS, Opus from Android, m4a from Signal Desktop - just works.
@@ -21,7 +27,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 48000
-OPUS_BITRATE = "24k"
+AAC_BITRATE = "48k"
 
 
 class AudioError(RuntimeError):
@@ -129,16 +135,15 @@ class AudioEngine:
     # -- encoding --------------------------------------------------------
 
     async def encode_voice_note(self, wav_path: Path) -> Path:
-        """Transcode a captured WAV to Ogg/Opus for sending as a voice note."""
+        """Transcode a captured WAV to AAC/M4A for sending as a voice note."""
         _require("ffmpeg")
-        target = wav_path.with_suffix(".ogg")
+        target = wav_path.with_suffix(".m4a")
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-nostdin", "-y",
             "-i", str(wav_path),
             "-ac", "1",
-            "-c:a", "libopus",
-            "-b:a", OPUS_BITRATE,
-            "-application", "voip",
+            "-c:a", "aac",
+            "-b:a", AAC_BITRATE,
             str(target),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
@@ -146,7 +151,7 @@ class AudioEngine:
         _, stderr = await proc.communicate()
         if proc.returncode != 0 or not target.exists():
             raise AudioError(
-                f"opus encode failed: {stderr.decode(errors='replace')[-400:]}"
+                f"aac encode failed: {stderr.decode(errors='replace')[-400:]}"
             )
         _unlink(wav_path)
         return target
