@@ -56,7 +56,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "playback_gap_seconds": 1.0,
         "max_record_seconds": 60,
         "min_record_seconds": 0.7,
-        "ringtone_volume": 0.8,
+        "ringtone_volume": 0.6,
     },
     "behaviour": {
         "selection_timeout_seconds": 30,

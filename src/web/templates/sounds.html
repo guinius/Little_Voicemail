@@ -62,7 +62,7 @@
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
             name: ringtone.value,
-            volume: slider ? slider.value : 0.8,
+            volume: slider ? slider.value : 0.6,
           }),
         });
         const body = await res.json().catch(() => ({}));

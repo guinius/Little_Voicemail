@@ -326,17 +326,24 @@ for a garden.
 levels before suspecting the wiring. The TLV320AIC3x kernel driver's
 defaults leave real headroom unused on every boot — `PCM`, `HP DAC` and
 `Line DAC` playback volumes all come up around -23.5 dB below their own
-maximum — and nothing touches them otherwise, so a fresh boot is quiet by
-default rather than by fault. `install.sh` installs
-`little-voicemail-audio-levels.service`, a one-shot unit that maxes every
-`*Playback Volume` / unmutes every `*Playback Switch` control the card
-exposes on every boot (see `tools/set-output-levels.sh` — it discovers the
-controls by name rather than hardcoding TLV320AIC3104-specific ones, so it
-also covers a v1.0/WM8960 board). To apply it immediately without
-rebooting:
+maximum, and the mic's `PGA Capture Volume` comes up around +16 dB out of a
+possible +59.5 dB — and nothing touches any of it otherwise, so a fresh
+boot is quiet on both playback and recording by default, not by fault.
+`install.sh` installs `little-voicemail-audio-levels.service`, a one-shot
+unit that maxes every `*Playback Volume` / `*Capture Volume` and unmutes
+every `*Playback Switch` / `*Capture Switch` control the card exposes, on
+every boot (see `tools/set-audio-levels.sh` — it discovers the controls by
+name rather than hardcoding TLV320AIC3104-specific ones, so it also covers
+a v1.0/WM8960 board). Playback goes all the way to its ceiling; capture
+gain deliberately doesn't — amplification ahead of the ADC clips on
+anything but a whisper if pushed too far, so `CAPTURE_GAIN_FRACTION` near
+the top of the script is a starting point (currently 60% of the control's
+range), not a value measured against real hardware. Raise it if recordings
+are still too quiet, lower it if they start clipping/distorting, then
+re-run the script - no reboot needed:
 
 ```bash
-sudo /opt/little-voicemail/tools/set-output-levels.sh
+sudo /opt/little-voicemail/tools/set-audio-levels.sh
 ```
 
 ## Testing without the MCP23017
