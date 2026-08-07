@@ -317,8 +317,27 @@ and board notes.
 ### Speaker
 
 Solder to the ReSpeaker's JST 2.0 speaker pads, or use the 3.5 mm jack into
-a powered speaker if you prefer. The onboard amp gives 1 W into 8 Ω — loud
-enough for a bedroom, not for a garden.
+a powered speaker if you prefer. Both are driven by the same onboard amp,
+already amplified — wire a raw speaker straight to the JST pads, no
+external amp needed. It gives 1 W into 8 Ω — loud enough for a bedroom, not
+for a garden.
+
+**If it sounds much quieter than that,** check the codec's own volume
+levels before suspecting the wiring. The TLV320AIC3x kernel driver's
+defaults leave real headroom unused on every boot — `PCM`, `HP DAC` and
+`Line DAC` playback volumes all come up around -23.5 dB below their own
+maximum — and nothing touches them otherwise, so a fresh boot is quiet by
+default rather than by fault. `install.sh` installs
+`little-voicemail-audio-levels.service`, a one-shot unit that maxes every
+`*Playback Volume` / unmutes every `*Playback Switch` control the card
+exposes on every boot (see `tools/set-output-levels.sh` — it discovers the
+controls by name rather than hardcoding TLV320AIC3104-specific ones, so it
+also covers a v1.0/WM8960 board). To apply it immediately without
+rebooting:
+
+```bash
+sudo /opt/little-voicemail/tools/set-output-levels.sh
+```
 
 ## Testing without the MCP23017
 
