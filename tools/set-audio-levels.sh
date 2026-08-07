@@ -1,19 +1,32 @@
 #!/usr/bin/env bash
 # Push every playback volume control on the ReSpeaker HAT's codec to
-# maximum, and unmute every playback switch.
+# maximum, unmute every playback/capture switch, and give the microphone
+# preamp a deliberate (but not maxed-out) boost.
 #
 # Nothing else in this project ever touches these - the kernel driver's own
 # defaults leave real headroom unused on every boot (on the TLV320AIC3104,
-# for instance, PCM/HP DAC/Line DAC all come up around -23.5 dB below their
-# own maximum), which is quiet enough to be mistaken for a hardware fault.
-# See HARDWARE.md.
+# for instance, PCM/HP DAC/Line DAC playback all come up around -23.5 dB
+# below their own maximum, and the mic's PGA Capture Volume comes up around
+# +16 dB out of a possible +59.5 dB), which is quiet enough on both ends to
+# be mistaken for a hardware fault. See HARDWARE.md.
 #
 # Deliberately generic rather than hardcoding TLV320AIC3104 control names:
-# it discovers every "* Playback Volume" / "* Playback Switch" control the
-# card actually exposes and maxes/unmutes each one, so the same script
-# works whether install.sh chose the v2.0 (TLV320AIC3104) or v1.0 (WM8960)
-# overlay - see LV_AUDIO_OVERLAY. Capture (microphone) controls are
-# untouched on purpose.
+# it discovers every "* Playback Volume" / "* Capture Volume" /
+# "* Playback Switch" / "* Capture Switch" control the card actually
+# exposes and sets each one, so the same script works whether install.sh
+# chose the v2.0 (TLV320AIC3104) or v1.0 (WM8960) overlay - see
+# LV_AUDIO_OVERLAY.
+#
+# Playback goes all the way to maximum: that's just how loud the amp/
+# speaker/headphones get, with no risk beyond "loud". Capture gain is
+# different - it's amplification ahead of the ADC, so pushing it too far
+# clips on anything but a whisper from across the room rather than just
+# getting louder. CAPTURE_GAIN_FRACTION below is a deliberate middle
+# ground (a meaningful boost over the ~27% of range the driver defaults
+# to, while leaving real margin below the ceiling), not a value measured
+# against real hardware - if recordings are still too quiet, raise it; if
+# they start clipping/distorting, lower it. Re-run this script to apply a
+# new value immediately, no reboot needed.
 #
 # This uses the *raw* control interface throughout (amixer controls/cget/
 # cset, addressed by numid) rather than the "simple" mixer interface
@@ -22,9 +35,11 @@
 # codec it doesn't recognise perfectly real controls that `amixer controls`
 # lists just fine ("Unable to find simple control 'PCM Playback Volume',0")
 # - it just doesn't know that name. cget/cset by numid always works, at
-# the cost of doing the value read/max-substitution by hand instead of
-# getting sset's "100%"/"on" convenience for free.
+# the cost of doing the value read/substitution by hand instead of getting
+# sset's "100%"/"on" convenience for free.
 set -euo pipefail
+
+CAPTURE_GAIN_FRACTION=0.6
 
 # The card can take a moment to enumerate right after boot even though this
 # unit orders itself after sound.target - retry rather than run once and
@@ -67,10 +82,19 @@ amixer -c "$card" controls 2>/dev/null | while IFS= read -r line; do
                 | sed -n 's/.*max=\([0-9]*\).*/\1/p')"
             [[ -n "$max" ]] && set_control "$numid" "$max" '[0-9]+'
             ;;
-        *"Playback Switch")
+        *"Playback Switch" | *"Capture Switch")
             set_control "$numid" "on" '[a-z]+'
+            ;;
+        *"Capture Volume")
+            max="$(amixer -c "$card" cget numid="$numid" 2>/dev/null \
+                | sed -n 's/.*max=\([0-9]*\).*/\1/p')"
+            if [[ -n "$max" ]]; then
+                target="$(awk -v m="$max" -v f="$CAPTURE_GAIN_FRACTION" \
+                    'BEGIN { printf "%d", m * f }')"
+                set_control "$numid" "$target" '[0-9]+'
+            fi
             ;;
     esac
 done
 
-echo "levels set to maximum on card $card"
+echo "levels set on card $card (playback maxed, capture gain at ${CAPTURE_GAIN_FRACTION})"

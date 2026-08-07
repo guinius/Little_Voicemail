@@ -317,8 +317,38 @@ async def test_you_must_listen_before_you_can_reply(env):
 
     assert audio.played == ["/tmp/in.ogg"]
     assert queue.pending_counts() == {}
-    assert app.selected_slot == 1  # now they may reply
     assert signal.receipts == [(GRANDMA, 1000)]
+
+
+@pytest.mark.asyncio
+async def test_listening_does_not_auto_select_for_reply(env):
+    """Listening plays the message and leaves the button idle - the child
+    presses it again to select and reply, the same as any other press.
+    Auto-selecting made it too easy to hold PTT and reply to whoever was
+    last played without meaning to."""
+    app, _, audio, _, queue = env
+    await app._on_voice_message(
+        IncomingVoiceMessage(GRANDMA, 1000, Path("/tmp/in.ogg"), "audio/ogg")
+    )
+
+    await press(app, 1)
+
+    assert audio.played == ["/tmp/in.ogg"]
+    assert app.selected_slot is None
+    assert app.state is State.IDLE
+
+
+@pytest.mark.asyncio
+async def test_a_second_press_after_listening_selects_for_reply(env):
+    app, _, audio, _, queue = env
+    await app._on_voice_message(
+        IncomingVoiceMessage(GRANDMA, 1000, Path("/tmp/in.ogg"), "audio/ogg")
+    )
+    await press(app, 1)  # plays, no longer selects
+
+    await press(app, 1)  # nothing pending now, so this one selects
+
+    assert app.selected_slot == 1
 
 
 @pytest.mark.asyncio

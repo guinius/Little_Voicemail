@@ -239,9 +239,13 @@ class PhoneApp:
             try:
                 await self.audio.play_sequence(pending, on_played=retire)
             finally:
-                # Having listened, the child may now reply: leave the
-                # contact selected with a fresh 30 second window.
-                self._select(slot)
+                # Listening no longer auto-selects the contact for reply -
+                # the child presses the button again if they want to talk
+                # back, the same as any other press. Auto-selecting made it
+                # too easy to hold PTT and start replying to whoever was
+                # last played without meaning to.
+                self.state = State.IDLE
+                self._clear_selection()
 
     # -- recording and sending -------------------------------------------
 

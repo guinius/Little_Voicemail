@@ -427,10 +427,10 @@ cp "$INSTALL_DIR"/services/*.service /etc/systemd/system/
 # anything, so only the web UI, the setup portal and the audio-levels
 # one-shot come up now. The Signal tab in the web UI enables the other two
 # once linking succeeds. audio-levels doesn't need an account - it just
-# maxes out the codec's playback controls - but on a brand new install it
-# runs before the reboot that brings the overlay up, so it no-ops the first
-# time and does its actual job on every boot after that (see the service's
-# WantedBy=multi-user.target).
+# sets the codec's playback and capture levels - but on a brand new install
+# it runs before the reboot that brings the overlay up, so it no-ops the
+# first time and does its actual job on every boot after that (see the
+# service's WantedBy=multi-user.target).
 enable_now=(
     little-voicemail-web.service
     little-voicemail-portal.service
