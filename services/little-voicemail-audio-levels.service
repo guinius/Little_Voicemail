@@ -1,0 +1,16 @@
+[Unit]
+Description=Max out the ReSpeaker HAT's playback levels for Little Voicemail
+After=sound.target
+Wants=sound.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Deliberately root, not the voicemail user: amixer needs write access to
+# the ALSA control device, and this runs once at boot rather than
+# continuously, so it doesn't carry the same "long-lived process touching
+# untrusted input" risk the other services are sandboxed against.
+ExecStart=/opt/little-voicemail/tools/set-output-levels.sh
+
+[Install]
+WantedBy=multi-user.target

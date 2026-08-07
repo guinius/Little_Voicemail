@@ -143,12 +143,12 @@ check "Raspberry Pi's firstboot hook is intact" \
 
 # -- services ---------------------------------------------------------------
 for unit in little-voicemail-web little-voicemail-portal little-voicemail \
-            signal-cli little-voicemail-firstboot; do
+            signal-cli little-voicemail-firstboot little-voicemail-audio-levels; do
     check "$unit.service is installed" test -f "/etc/systemd/system/$unit.service"
 done
 
 for unit in little-voicemail-web little-voicemail-portal \
-            little-voicemail-firstboot; do
+            little-voicemail-firstboot little-voicemail-audio-levels; do
     check "$unit.service is enabled" \
         test -L "/etc/systemd/system/multi-user.target.wants/$unit.service"
 done
@@ -167,7 +167,8 @@ if command -v systemd-analyze >/dev/null 2>&1; then
     check "the unit files parse" systemd-analyze verify \
         /etc/systemd/system/little-voicemail-web.service \
         /etc/systemd/system/little-voicemail-portal.service \
-        /etc/systemd/system/signal-cli.service
+        /etc/systemd/system/signal-cli.service \
+        /etc/systemd/system/little-voicemail-audio-levels.service
 fi
 
 # -- privileges -------------------------------------------------------------
