@@ -80,7 +80,9 @@ async def run(args: argparse.Namespace) -> int:
     )
 
     app = PhoneApp(
-        config, hardware, audio, client, queue, status_path=data_dir / "status.json"
+        config, hardware, audio, client, queue,
+        status_path=data_dir / "status.json",
+        test_mode_flag_path=data_dir / "test_mode.flag",
     )
 
     loop = asyncio.get_running_loop()

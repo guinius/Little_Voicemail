@@ -72,6 +72,11 @@ def create_app(
     linker = linker or SignalLinker(config, signal_dir=signal_config_dir())
     quiet = QuietHours(config)
     audio = AudioEngine(config, work_dir=data_dir / "recordings", sounds_dir=sounds_dir)
+    # Button test mode lives across the process boundary as a flag file
+    # rather than a config.json value - see PhoneApp's own comment on
+    # test_mode_flag_path for why (config isn't live-reloaded by an
+    # already-running phone service).
+    test_mode_flag = data_dir / "test_mode.flag"
 
     app.secret_key = _session_secret(data_dir)
     app.config.update(
@@ -287,6 +292,32 @@ def create_app(
             recent=queue.recent(limit=25),
             audio_diag=_audio_diagnostics(config),
         )
+
+    @app.route("/button-test", methods=["GET"])
+    @login_required
+    def button_test():
+        status = _device_status(data_dir)
+        return render_template(
+            "button_test.html",
+            active=test_mode_flag.exists(),
+            status=status,
+            rows=_button_test_rows(status),
+        )
+
+    @app.route("/api/button-test/start", methods=["POST"])
+    @login_required
+    def button_test_start():
+        test_mode_flag.parent.mkdir(parents=True, exist_ok=True)
+        test_mode_flag.write_text("", encoding="utf-8")
+        log.info("parent started button test mode")
+        return jsonify({"active": True})
+
+    @app.route("/api/button-test/stop", methods=["POST"])
+    @login_required
+    def button_test_stop():
+        test_mode_flag.unlink(missing_ok=True)
+        log.info("parent stopped button test mode")
+        return jsonify({"active": False})
 
     # -- actions ---------------------------------------------------------
 
@@ -529,6 +560,29 @@ def _device_status(data_dir: Path) -> dict:
         return status
     except (OSError, json.JSONDecodeError):
         return {"stale": True, "state": "unknown", "signal_connected": False}
+
+
+def _button_test_rows(status: dict) -> list[dict]:
+    """The button-test table's initial rows for the server-rendered page.
+
+    Prefers the phone service's own live test_events (so reloading the page
+    mid-test doesn't reset the table to blank), falling back to a static
+    seven-row skeleton - PTT plus contacts 1-6 - when there's nothing to
+    show yet. The JS poll takes over updating it after that either way.
+    """
+    events = status.get("test_events")
+    if events:
+        return events
+    return [
+        {
+            "slot": slot,
+            "label": "Push to talk" if slot == 0 else f"Contact {slot}",
+            "action": None,
+            "at": None,
+            "duration": None,
+        }
+        for slot in range(0, NUM_CONTACTS + 1)
+    ]
 
 
 def _audio_diagnostics(config: Config) -> dict:
