@@ -26,7 +26,7 @@ from enum import Enum
 from pathlib import Path
 
 from .audio import AudioEngine, AudioError
-from .hardware import PTT, Action, ButtonEvent, Hardware, solid
+from .hardware import PTT, Action, ButtonEvent, Hardware, blink, solid
 from .messages import MessageQueue
 from .quiet_hours import QuietHours
 from .signal_client import IncomingVoiceMessage, ReadReceipt, SignalClient
@@ -294,9 +294,11 @@ class PhoneApp:
         )
 
     async def _send(self, slot: int, contact: dict, recording) -> None:
-        """Encode and deliver, keeping the lamp lit until it is on its way."""
+        """Encode and deliver, blinking the lamp slowly until it is on its
+        way - releasing the PTT button no longer leaves a steady "still
+        working" light, which read as stuck rather than in progress."""
         async with self._busy:
-            self.hw.leds.set(slot, solid())
+            self.hw.leds.set(slot, blink(period=1.5, duty=0.5))
             try:
                 ogg = await self.audio.encode_voice_note(recording.path)
                 await self.signal.send_voice_note(contact["number"], ogg)

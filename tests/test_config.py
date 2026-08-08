@@ -74,6 +74,25 @@ def test_settings_persist_across_reload(tmp_path):
     assert second.get("behaviour", "selection_timeout_seconds") == 45
 
 
+def test_a_change_from_another_process_is_picked_up_without_a_restart(tmp_path):
+    """The phone service and the web UI are separate processes, each with
+    its own long-lived Config instance pointed at the same file (see the
+    module docstring). A contact edited from the web UI must take effect
+    for the phone service immediately - not only after the phone service
+    is restarted and re-reads the file from scratch."""
+    path = tmp_path / "config.json"
+    phone = Config(path)
+    phone.set_contact(1, "Grandma", "+447700900123")
+    assert phone.contact(1)["number"] == "+447700900123"
+
+    web = Config(path)  # a second process opening the same file
+    web.set_contact(1, "Grandma", "+447700900999")
+
+    assert phone.contact(1)["number"] == "+447700900999"
+    assert phone.get("contacts")[0]["number"] == "+447700900999"
+    assert phone.slot_for_number("+447700900999") == 1
+
+
 def test_new_defaults_appear_after_an_upgrade(tmp_path):
     """An old config missing a key must pick up the new default."""
     path = tmp_path / "config.json"
