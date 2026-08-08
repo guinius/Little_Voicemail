@@ -30,7 +30,7 @@ from pathlib import Path
 
 from .audio import AudioEngine, AudioError
 from .config import NUM_CONTACTS
-from .hardware import PTT, Action, ButtonEvent, Hardware, solid
+from .hardware import PTT, Action, ButtonEvent, Hardware, blink, solid
 from .messages import MessageQueue
 from .quiet_hours import QuietHours
 from .signal_client import IncomingVoiceMessage, ReadReceipt, SignalClient
@@ -428,9 +428,11 @@ class PhoneApp:
         )
 
     async def _send(self, slot: int, contact: dict, recording) -> None:
-        """Encode and deliver, keeping the lamp lit until it is on its way."""
+        """Encode and deliver, blinking the lamp slowly until it is on its
+        way - releasing the PTT button no longer leaves a steady "still
+        working" light, which read as stuck rather than in progress."""
         async with self._busy:
-            self.hw.leds.set(slot, solid())
+            self.hw.leds.set(slot, blink(period=1.5, duty=0.5))
             try:
                 ogg = await self.audio.encode_voice_note(recording.path)
                 await self.signal.send_voice_note(contact["number"], ogg)
@@ -455,8 +457,6 @@ class PhoneApp:
 
     async def _indicate_failure(self, slot: int) -> None:
         """Blink the contact's own lamp quickly so the child knows to retry."""
-        from .hardware import blink
-
         self.hw.leds.set(slot, blink(period=0.2, duty=0.5))
         await asyncio.sleep(2.0)
         self.hw.leds.off(slot)
