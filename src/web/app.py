@@ -18,6 +18,8 @@ import json
 import logging
 import re
 import secrets
+import shutil
+import subprocess
 from functools import wraps
 from pathlib import Path
 
@@ -34,7 +36,7 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from ..audio import AudioEngine
+from ..audio import LEVELS_SCRIPT, AudioEngine, _playback_env
 from ..config import NUM_CONTACTS, Config
 from ..messages import MessageQueue
 from ..paths import (
@@ -70,6 +72,11 @@ def create_app(
     linker = linker or SignalLinker(config, signal_dir=signal_config_dir())
     quiet = QuietHours(config)
     audio = AudioEngine(config, work_dir=data_dir / "recordings", sounds_dir=sounds_dir)
+    # Button test mode lives across the process boundary as a flag file
+    # rather than a config.json value - see PhoneApp's own comment on
+    # test_mode_flag_path for why (config isn't live-reloaded by an
+    # already-running phone service).
+    test_mode_flag = data_dir / "test_mode.flag"
 
     app.secret_key = _session_secret(data_dir)
     app.config.update(
@@ -191,6 +198,54 @@ def create_app(
             volume=config.get("audio", "ringtone_volume", default=0.8),
         )
 
+    @app.route("/api/sounds/preview", methods=["POST"])
+    @login_required
+    def preview_sound():
+        """Play a ringtone through the device's own speaker, right now.
+
+        Deliberately not an in-browser <audio> tag: the point of a preview
+        button here is confirming the actual hardware speaker works, which
+        an in-browser player can't tell you - it would only prove the file
+        itself decodes fine on whatever device the parent is browsing from.
+        This shells out to ffplay against the configured output_device, the
+        same path a real ringtone or incoming message takes, so a parent
+        gets a genuine end-to-end check.
+
+        Blocking is deliberate too: cheroot serves requests on a thread
+        pool, so one short (a few seconds, at most) synchronous ffplay call
+        doesn't stall the rest of the UI for other requests.
+        """
+        payload = request.get_json(silent=True) or {}
+        name = payload.get("name") or request.form.get("name", "")
+        available = audio.available_ringtones()
+        if name not in available:
+            return jsonify({"error": "Unknown ringtone."}), 400
+        if not shutil.which("ffplay"):
+            return jsonify({"error": "ffplay is not installed."}), 500
+
+        volume = _clamp_float(
+            payload.get("volume", request.form.get("volume")), 0.0, 1.0, 0.8
+        )
+        _reapply_levels()
+        path = sounds_dir / name
+        try:
+            result = subprocess.run(
+                [
+                    "ffplay", "-nodisp", "-autoexit", "-loglevel", "error",
+                    "-volume", str(int(volume * 100)),
+                    str(path),
+                ],
+                capture_output=True, text=True, timeout=70,
+                env=_playback_env(audio.output_device),
+            )
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "Playback timed out."}), 500
+        if result.returncode != 0:
+            detail = result.stderr.strip()[-300:] or "playback failed"
+            log.warning("sound preview of %s failed: %s", name, detail)
+            return jsonify({"error": detail}), 500
+        return jsonify({"ok": True})
+
     @app.route("/quiet-times", methods=["GET", "POST"])
     @login_required
     def quiet_times():
@@ -235,7 +290,34 @@ def create_app(
             account=config.get("signal", "account", default=""),
             status=_device_status(data_dir),
             recent=queue.recent(limit=25),
+            audio_diag=_audio_diagnostics(config),
         )
+
+    @app.route("/button-test", methods=["GET"])
+    @login_required
+    def button_test():
+        status = _device_status(data_dir)
+        return render_template(
+            "button_test.html",
+            active=test_mode_flag.exists(),
+            status=status,
+            rows=_button_test_rows(status),
+        )
+
+    @app.route("/api/button-test/start", methods=["POST"])
+    @login_required
+    def button_test_start():
+        test_mode_flag.parent.mkdir(parents=True, exist_ok=True)
+        test_mode_flag.write_text("", encoding="utf-8")
+        log.info("parent started button test mode")
+        return jsonify({"active": True})
+
+    @app.route("/api/button-test/stop", methods=["POST"])
+    @login_required
+    def button_test_stop():
+        test_mode_flag.unlink(missing_ok=True)
+        log.info("parent stopped button test mode")
+        return jsonify({"active": False})
 
     # -- actions ---------------------------------------------------------
 
@@ -478,6 +560,88 @@ def _device_status(data_dir: Path) -> dict:
         return status
     except (OSError, json.JSONDecodeError):
         return {"stale": True, "state": "unknown", "signal_connected": False}
+
+
+def _button_test_rows(status: dict) -> list[dict]:
+    """The button-test table's initial rows for the server-rendered page.
+
+    Prefers the phone service's own live test_events (so reloading the page
+    mid-test doesn't reset the table to blank), falling back to a static
+    seven-row skeleton - PTT plus contacts 1-6 - when there's nothing to
+    show yet. The JS poll takes over updating it after that either way.
+    """
+    events = status.get("test_events")
+    if events:
+        return events
+    return [
+        {
+            "slot": slot,
+            "label": "Push to talk" if slot == 0 else f"Contact {slot}",
+            "action": None,
+            "at": None,
+            "duration": None,
+        }
+        for slot in range(0, NUM_CONTACTS + 1)
+    ]
+
+
+def _audio_diagnostics(config: Config) -> dict:
+    """Read-only environment checks for the recording/playback pipeline.
+
+    None of this opens an audio device exclusively or writes anything, so
+    it is safe to run on every System page load - the point is to answer
+    "is the plumbing even there" without an SSH session, for whoever is
+    staring at this page trying to figure out why a send failed.
+    """
+    tools = {name: shutil.which(name) is not None
+             for name in ("arecord", "ffmpeg", "ffplay")}
+    return {
+        "tools": tools,
+        "sound_cards": (
+            _run_diag(["arecord", "-l"]) if tools["arecord"]
+            else "arecord is not installed"
+        ),
+        "i2c": (
+            _run_diag(["i2cdetect", "-y", "1"]) if shutil.which("i2cdetect")
+            else None  # not fatal - it's a diagnostic aid, not a dependency
+        ),
+        "input_device": config.get("audio", "input_device", default=""),
+        "output_device": config.get("audio", "output_device", default=""),
+    }
+
+
+def _run_diag(command: list[str], timeout: float = 4.0) -> str:
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout
+        )
+        return (result.stdout + result.stderr).strip() or "(no output)"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"could not run {' '.join(command)}: {exc}"
+
+
+def _reapply_levels() -> None:
+    """Best-effort re-run of set-audio-levels.sh before a preview play.
+
+    Mirrors AudioEngine._reapply_levels() in audio.py - this route plays
+    through a separate subprocess call rather than through AudioEngine, so
+    it needs its own copy rather than sharing that one. See LEVELS_SCRIPT's
+    docstring in audio.py for why this has to happen around every use
+    rather than just once at boot.
+    """
+    if not LEVELS_SCRIPT.exists():
+        return
+    try:
+        result = subprocess.run(
+            [str(LEVELS_SCRIPT)], capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0:
+            log.warning(
+                "set-audio-levels.sh exited %s: %s",
+                result.returncode, (result.stdout + result.stderr).strip()[-300:],
+            )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.warning("could not reapply audio levels: %s", exc)
 
 
 def _session_secret(data_dir: Path) -> bytes:

@@ -2,6 +2,9 @@
 
 Behaviour, in the order a child experiences it:
 
+  * On startup, once buttons/lights/audio are ready, chime.wav plays once
+    to say the box is awake - unless quiet time is running, in which case
+    it stays silent like everything else during quiet time.
   * Press a contact button. Its lamp lights steady for 30 seconds, then the
     selection lapses back to standby.
   * If that contact has unheard messages, the first press plays them instead
@@ -26,12 +29,20 @@ from enum import Enum
 from pathlib import Path
 
 from .audio import AudioEngine, AudioError
+from .config import NUM_CONTACTS
 from .hardware import PTT, Action, ButtonEvent, Hardware, solid
 from .messages import MessageQueue
 from .quiet_hours import QuietHours
 from .signal_client import IncomingVoiceMessage, ReadReceipt, SignalClient
 
 log = logging.getLogger(__name__)
+
+# Safety net for button test mode: if a parent forgets to turn it off, the
+# device would otherwise sit there ignoring every real button press
+# indefinitely. Ten minutes is long enough to work through every button
+# with some to spare, short enough that a forgotten test mode does not
+# strand the device for the rest of the day.
+TEST_MODE_MAX_SECONDS = 600
 
 
 class State(Enum):
@@ -51,6 +62,7 @@ class PhoneApp:
         signal: SignalClient,
         queue: MessageQueue,
         status_path: Path | None = None,
+        test_mode_flag_path: Path | None = None,
     ):
         self.config = config
         self.hw = hardware
@@ -59,6 +71,13 @@ class PhoneApp:
         self.queue = queue
         self.quiet = QuietHours(config)
         self.status_path = status_path
+        # Button test mode is toggled by the web UI creating/deleting this
+        # file. It can't just flip a value in config.json instead - Config
+        # is loaded once at startup and this (the phone service) never
+        # rereads it, so an already-running process would never notice a
+        # change made by the web process. The tick loop polls for the
+        # file's existence instead, which needs no reload machinery at all.
+        self._test_mode_flag_path = test_mode_flag_path
 
         self.state = State.IDLE
         self.selected_slot: int | None = None
@@ -71,6 +90,19 @@ class PhoneApp:
         # is held onto so shutdown can wait for it instead of tearing the
         # database out from under a half-finished send.
         self._send_task: asyncio.Task | None = None
+        # The last recording/encode/send failure, so a parent staring at the
+        # System page can see *why* the lamp flashed instead of only that it
+        # did - without going and finding journalctl. Cleared on the next
+        # successful send, not on every attempt, so it survives long enough
+        # to actually be read.
+        self._last_error: str | None = None
+        self._last_error_at: str = ""
+        # Button test mode: press any button, it lights only its own lamp
+        # and gets recorded here instead of doing anything else - a pure
+        # hardware loopback check for wiring new buttons. See _poll_test_mode.
+        self._test_mode = False
+        self._test_mode_since = 0.0
+        self._test_events: dict[int, dict] = {}
 
         signal.on_voice_message = self._on_voice_message
         signal.on_read_receipt = self._on_read_receipt
@@ -78,9 +110,19 @@ class PhoneApp:
     # -- lifecycle -------------------------------------------------------
 
     async def run(self) -> None:
+        # A leftover flag from an unclean previous exit (crash, power cut)
+        # must not make this boot come up already in test mode with no
+        # parent watching - startup, not just graceful shutdown, is what
+        # reliably covers that case.
+        if self._test_mode_flag_path is not None:
+            try:
+                self._test_mode_flag_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         self.hw.start()
         self.signal.start()
         self._refresh_leds()
+        await self._play_boot_chime()
         self._tasks = [
             asyncio.create_task(self._button_loop(), name="buttons"),
             asyncio.create_task(self._tick_loop(), name="tick"),
@@ -99,6 +141,26 @@ class PhoneApp:
         await self.wait_for_send(timeout=10.0)
         await self.signal.stop()
         await self.hw.stop()
+
+    async def _play_boot_chime(self) -> None:
+        """A short "I'm awake" chime once startup finishes, so a parent
+        knows the box actually came back up after a power cycle without
+        having to check the web UI. Skipped during quiet time - the whole
+        point of quiet time is that the box stays silent, and a boot chime
+        is exactly the kind of noise a power cut at 2am would otherwise
+        cause. Always chime.wav specifically, not whatever ringtone is
+        configured for messages - this is a distinct "I've booted" signal,
+        not a stand-in for one, so it stays fixed even if a parent changes
+        the message ringtone.
+        """
+        if self.quiet.is_quiet():
+            return
+        chime = self.audio.sounds_dir / "chime.wav"
+        if not chime.exists():
+            log.warning("chime.wav missing from %s; skipping boot chime",
+                       self.audio.sounds_dir)
+            return
+        await self.audio.play(chime)
 
     async def wait_for_send(self, timeout: float = 10.0) -> None:
         """Let an in-flight send finish (or give up) before tearing down."""
@@ -125,6 +187,7 @@ class PhoneApp:
                 if now - last_status_write >= 3.0:
                     last_status_write = now
                     self._write_status()
+                self._poll_test_mode(now)
                 if (
                     self.state is State.SELECTED
                     and self._selection_expires
@@ -141,12 +204,73 @@ class PhoneApp:
                         # Drop any half-finished interaction.
                         self._clear_selection()
                     # Ending quiet time reveals whatever queued up during it
-                    # (requirement 12).
-                    self._refresh_leds()
+                    # (requirement 12) - but not over test mode's own LED
+                    # display, which owns the lamps until it exits.
+                    if not self._test_mode:
+                        self._refresh_leds()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("tick loop error")
+
+    # -- button test mode --------------------------------------------------
+
+    def _poll_test_mode(self, now: float) -> None:
+        """Enter/exit test mode by noticing the flag file's existence.
+
+        Called every tick (0.25s) rather than on some longer status-write
+        cadence, so a parent toggling the web UI's button sees it react
+        close to instantly rather than after a multi-second lag.
+        """
+        if self._test_mode_flag_path is None:
+            return
+        active = self._test_mode_flag_path.exists()
+        if active and not self._test_mode:
+            self._enter_test_mode(now)
+        elif self._test_mode and not active:
+            self._exit_test_mode()
+        elif self._test_mode and now - self._test_mode_since > TEST_MODE_MAX_SECONDS:
+            log.warning("button test mode left on too long; turning it off")
+            self._exit_test_mode()
+            try:
+                self._test_mode_flag_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _enter_test_mode(self, now: float) -> None:
+        log.info("button test mode started")
+        self._test_mode = True
+        self._test_mode_since = now
+        self._test_events = {}
+        self._clear_selection()
+        self.hw.leds.all_off()
+        self._write_status()
+
+    def _exit_test_mode(self) -> None:
+        log.info("button test mode ended")
+        self._test_mode = False
+        self._test_events = {}
+        self._refresh_leds()
+        self._write_status()
+
+    def _handle_test_button(self, event: ButtonEvent) -> None:
+        """Light exactly the pressed button's own lamp and record what
+        happened for the web UI - a pure hardware loopback check, none of
+        the normal selecting/recording/sending behaviour."""
+        slot = event.slot
+        if event.action is Action.PRESS:
+            self.hw.leds.set(slot, solid())
+        elif event.action is Action.RELEASE:
+            self.hw.leds.off(slot)
+        self._test_events[slot] = {
+            "action": event.action.value,
+            "at": time.strftime("%H:%M:%S"),
+            "duration": round(event.duration, 2) if event.duration else None,
+        }
+        # Test mode is exactly the situation where a parent is staring at
+        # the page waiting for feedback - the normal 3s status-write
+        # throttle would make every press feel unresponsive.
+        self._write_status()
 
     # -- button handling -------------------------------------------------
 
@@ -161,6 +285,10 @@ class PhoneApp:
                 log.exception("error handling %s", event)
 
     async def _handle_button(self, event: ButtonEvent) -> None:
+        if self._test_mode:
+            self._handle_test_button(event)
+            return
+
         if self.quiet.is_quiet():
             # Only answer the initial press, so holding a button does not
             # queue up a stack of flash sequences.
@@ -232,9 +360,13 @@ class PhoneApp:
             try:
                 await self.audio.play_sequence(pending, on_played=retire)
             finally:
-                # Having listened, the child may now reply: leave the
-                # contact selected with a fresh 30 second window.
-                self._select(slot)
+                # Listening no longer auto-selects the contact for reply -
+                # the child presses the button again if they want to talk
+                # back, the same as any other press. Auto-selecting made it
+                # too easy to hold PTT and start replying to whoever was
+                # last played without meaning to.
+                self.state = State.IDLE
+                self._clear_selection()
 
     # -- recording and sending -------------------------------------------
 
@@ -253,8 +385,9 @@ class PhoneApp:
             return
         try:
             await self.audio.start_recording()
-        except AudioError:
+        except AudioError as exc:
             log.exception("could not start recording")
+            self._record_error(f"could not start recording: {exc}")
             return
         self.state = State.RECORDING
         self._recording_slot = self.selected_slot
@@ -272,8 +405,9 @@ class PhoneApp:
         self._recording_slot = None
         try:
             recording = await self.audio.stop_recording()
-        except AudioError:
+        except AudioError as exc:
             log.exception("could not stop recording")
+            self._record_error(f"could not stop recording: {exc}")
             self._clear_selection()
             return
 
@@ -304,12 +438,16 @@ class PhoneApp:
                     "sent %.1fs voice note to %s (slot %s)",
                     recording.duration, contact["name"] or contact["number"], slot,
                 )
-            except Exception:
+                self._last_error = None  # a good send outweighs a stale complaint
+            except Exception as exc:
                 log.exception("failed to send voice note to slot %s", slot)
+                self._record_error(
+                    f"send to slot {slot} failed: {type(exc).__name__}: {exc}"
+                )
                 await self._indicate_failure(slot)
             finally:
                 try:
-                    Path(recording.path).with_suffix(".ogg").unlink(missing_ok=True)
+                    Path(recording.path).with_suffix(".m4a").unlink(missing_ok=True)
                 except OSError:
                     pass
                 self.state = State.IDLE
@@ -322,6 +460,11 @@ class PhoneApp:
         self.hw.leds.set(slot, blink(period=0.2, duty=0.5))
         await asyncio.sleep(2.0)
         self.hw.leds.off(slot)
+
+    def _record_error(self, message: str) -> None:
+        """Remember the reason for the last failure, for the System page."""
+        self._last_error = message
+        self._last_error_at = time.strftime("%Y-%m-%d %H:%M:%S")
 
     # -- inbound ---------------------------------------------------------
 
@@ -396,4 +539,25 @@ class PhoneApp:
             ),
             "signal_connected": self.signal.connected,
             "hardware_live": self.hw.live,
+            "last_error": self._last_error,
+            "last_error_at": self._last_error_at or None,
+            "test_mode": self._test_mode,
+            "test_events": self._test_events_for_status(),
         }
+
+    def _test_events_for_status(self) -> list[dict]:
+        """Every button, PTT first, each with its last recorded test-mode
+        action - not just the ones pressed so far, so the web UI can show
+        a full checklist rather than only a growing log."""
+        if not self._test_mode:
+            return []
+        slots = (PTT, *range(1, NUM_CONTACTS + 1))
+        empty = {"action": None, "at": None, "duration": None}
+        return [
+            {
+                "slot": slot,
+                "label": "Push to talk" if slot == PTT else f"Contact {slot}",
+                **self._test_events.get(slot, empty),
+            }
+            for slot in slots
+        ]

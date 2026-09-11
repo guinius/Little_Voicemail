@@ -18,6 +18,7 @@
     <a href="{{ url_for('quiet_times') }}" {% if request.endpoint == 'quiet_times' %}class="active"{% endif %}>Quiet&nbsp;times</a>
     <a href="{{ url_for('signal_page') }}" {% if request.endpoint == 'signal_page' %}class="active"{% endif %}>Signal{% if not signal_linked %}<span class="dot" title="not linked yet"></span>{% endif %}</a>
     <a href="{{ url_for('system') }}" {% if request.endpoint == 'system' %}class="active"{% endif %}>System</a>
+    <a href="{{ url_for('button_test') }}" {% if request.endpoint == 'button_test' %}class="active"{% endif %}>Button&nbsp;test</a>
     <a href="{{ url_for('logout') }}" class="muted">Log out</a>
   </div>
 </nav>

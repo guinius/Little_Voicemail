@@ -220,7 +220,17 @@ class LedController:
                 # on the pins and keeps this to one I2C transaction.
                 self._expander.write_gpio(~word & LED_MASK)
             except OSError:
+                # The MCP23017 backend's failure mode: an I2C transaction
+                # against a bus that has gone away.
                 log.exception("I2C write to LED expander failed")
+            except RuntimeError:
+                # The direct-GPIO backend's failure mode instead - RPi.GPIO
+                # raises this if a pin's hardware state isn't what it
+                # expects (e.g. cleanup() already ran on it). Same "log and
+                # move on" response either way: this write loses at most one
+                # frame of lamp state, and re-raising would crash whichever
+                # coroutine is mid-shutdown for no benefit.
+                log.exception("GPIO write to LED pins failed")
 
 
 @dataclass

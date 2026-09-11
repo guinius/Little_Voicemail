@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Button test &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<h1>Button test</h1>
+
+<div class="card">
+  <p class="hint">
+    For checking wiring on new buttons: while running, pressing any button
+    or push-to-talk lights <em>only that button's own lamp</em> and shows up
+    below - nothing else happens. No recording, no selecting, no sending.
+    Turns itself off automatically after 10 minutes if you forget, so it
+    can't strand the device.
+  </p>
+
+  {% if not status.get('hardware_live') %}
+    <div class="banner error">
+      Buttons and lights are running simulated (no GPIO detected) - pressing
+      a real button won't show up here until that's sorted out.
+    </div>
+  {% endif %}
+
+  {% if status.stale %}
+    <div class="banner error">
+      The phone service isn't running, so there's nothing to receive button
+      presses at all. Start it before testing.
+    </div>
+  {% endif %}
+
+  <div class="actions">
+    <button type="button" id="toggle">{{ "Stop test mode" if active else "Start test mode" }}</button>
+  </div>
+
+  <p class="hint" id="mode-status">
+    {% if active %}Test mode is running.{% else %}Test mode is off.{% endif %}
+  </p>
+</div>
+
+<div class="card">
+  <h2>Buttons</h2>
+  <table id="button-table">
+    <tr><th>Button</th><th>Last seen</th><th>When</th><th>Held for</th></tr>
+    {% for row in rows %}
+      <tr id="row-{{ row.slot }}">
+        <td>{{ row.label }}</td>
+        <td id="action-{{ row.slot }}">
+          {% if row.action %}{{ row.action }}{% else %}<span class="hint">not pressed yet</span>{% endif %}
+        </td>
+        <td id="at-{{ row.slot }}">{{ row.at or "" }}</td>
+        <td id="duration-{{ row.slot }}">{{ (row.duration ~ "s") if row.duration else "" }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  let active = {{ "true" if active else "false" }};
+  const toggleBtn = document.getElementById('toggle');
+  const modeStatus = document.getElementById('mode-status');
+  let pollTimer = null;
+
+  function setActive(nowActive) {
+    active = nowActive;
+    toggleBtn.textContent = active ? 'Stop test mode' : 'Start test mode';
+    modeStatus.textContent = active ? 'Test mode is running.' : 'Test mode is off.';
+    if (active) {
+      poll();
+    } else if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  async function poll() {
+    if (!active) return;
+    try {
+      const res = await fetch('{{ url_for("api_status") }}');
+      if (res.ok) {
+        const body = await res.json();
+        const device = body.device || {};
+        if (device.test_mode === false) {
+          // Turned off elsewhere, or the 10-minute safety timeout fired.
+          setActive(false);
+          return;
+        }
+        for (const row of device.test_events || []) {
+          const actionCell = document.getElementById('action-' + row.slot);
+          const atCell = document.getElementById('at-' + row.slot);
+          const durationCell = document.getElementById('duration-' + row.slot);
+          if (!actionCell) continue;
+          if (row.action) {
+            actionCell.textContent = row.action;
+            atCell.textContent = row.at || '';
+            durationCell.textContent = row.duration ? row.duration + 's' : '';
+          }
+        }
+      }
+    } catch (err) {
+      // A dropped poll is not worth surfacing - just try again next tick.
+    }
+    pollTimer = setTimeout(poll, 400);
+  }
+
+  toggleBtn.addEventListener('click', async () => {
+    toggleBtn.disabled = true;
+    const endpoint = active
+      ? '{{ url_for("button_test_stop") }}'
+      : '{{ url_for("button_test_start") }}';
+    try {
+      const res = await fetch(endpoint, {method: 'POST'});
+      if (res.ok) {
+        const body = await res.json();
+        setActive(body.active);
+      }
+    } finally {
+      toggleBtn.disabled = false;
+    }
+  });
+
+  if (active) poll();
+</script>
+{% endblock %}

@@ -1,9 +1,15 @@
 """Recording, encoding and playback.
 
 Recording uses `arecord` straight to WAV, then ffmpeg transcodes to mono
-Ogg/Opus at 24 kbps - the format Signal's own clients use for voice notes,
-which keeps a minute of speech under 200 kB and renders with the waveform
-and playback-speed controls rather than as a generic file attachment.
+AAC in an M4A container at 48 kbps - the format both Signal's iOS and
+Android apps actually record their own voice notes in. Ogg/Opus looks like
+the more obvious choice (lower bitrate, Signal's own docs mention it,
+Android and Desktop play it fine) and was tried first, but Signal iOS has a
+longstanding, unresolved bug where Opus voice attachments from other
+platforms just don't play (signalapp/Signal-iOS#5771) - the recording shows
+up but tapping it does nothing. AAC/M4A is what actually round-trips to
+every client, which matters more here than the extra bitrate costs: a
+minute of speech is still well under a megabyte.
 
 Playback goes through ffplay so that whatever a parent's phone sends -
 AAC from iOS, Opus from Android, m4a from Signal Desktop - just works.
@@ -18,10 +24,20 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .paths import PROJECT_ROOT
+
 log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 48000
-OPUS_BITRATE = "24k"
+AAC_BITRATE = "48k"
+# See tools/set-audio-levels.sh. The ReSpeaker codec doesn't just default to
+# quiet at boot - it appears to reset its own playback/capture volume
+# registers back to those defaults whenever its analog stage powers back up
+# after being idle (a DAPM power-management pattern common to ASoC codecs),
+# so a level fixed once at boot can go quietly missing again hours into
+# real use. Cheapest reliable fix is reapplying it around every actual use
+# rather than chasing the exact codec behaviour that causes it.
+LEVELS_SCRIPT = PROJECT_ROOT / "tools" / "set-audio-levels.sh"
 
 
 class AudioError(RuntimeError):
@@ -44,6 +60,11 @@ class AudioEngine:
         self._record_proc: asyncio.subprocess.Process | None = None
         self._playback_proc: asyncio.subprocess.Process | None = None
         self._play_lock = asyncio.Lock()
+        # Holds whichever _reapply_levels() call is currently in flight, so
+        # it isn't garbage collected mid-run (asyncio only keeps a weak
+        # reference to a bare create_task() result) - not awaited on by
+        # anything, see _kick_off_levels_reapply().
+        self._levels_task: asyncio.Task | None = None
 
     # -- settings --------------------------------------------------------
 
@@ -63,6 +84,72 @@ class AudioEngine:
     def min_record_seconds(self) -> float:
         return float(self._config.get("audio", "min_record_seconds", default=0.7))
 
+    # -- levels ------------------------------------------------------------
+
+    async def _reapply_levels(self) -> None:
+        """Best-effort re-run of set-audio-levels.sh before touching real
+        hardware. Never raises: a failure here should not stop a recording
+        or a playback from being attempted, just leave the mic/speaker at
+        whatever level the codec happened to reset itself to."""
+        if not LEVELS_SCRIPT.exists():
+            return
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(LEVELS_SCRIPT),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError as exc:
+            log.warning("could not reapply audio levels: %s", exc)
+            return
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            # Don't leave it running - a script that hangs once is liable to
+            # hang every time, and this runs before every recording/
+            # playback, so a leaked process here would pile up fast.
+            proc.kill()
+            try:
+                # kill() alone isn't enough of a guarantee here: a process
+                # with stdout=PIPE that communicate() never finished
+                # draining can leave Process.wait() hanging indefinitely
+                # even after the kill, regardless of the process actually
+                # being dead - bound this wait too rather than trust it to
+                # return promptly.
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                pass  # best-effort cleanup; not worth blocking on further
+            log.warning("set-audio-levels.sh timed out; killed it")
+            return
+        if proc.returncode != 0:
+            log.warning(
+                "set-audio-levels.sh exited %s: %s",
+                proc.returncode, out.decode(errors="replace").strip()[-300:],
+            )
+
+    def _kick_off_levels_reapply(self) -> None:
+        """Start _reapply_levels() in the background rather than awaiting
+        it inline.
+
+        It used to be awaited before every recording/playback, which
+        sounded right - fix the levels, then use the hardware - but
+        set-audio-levels.sh takes a real 1-3s (it does ~15-20 amixer round
+        trips), and the button loop processes one event at a time. That
+        delay sat in front of the PTT lamp lighting and the actual arecord
+        launch, so a normal quick press-and-release finished before
+        start_recording() had even returned: the release got queued,
+        then fired the instant the delayed start finally completed,
+        stopping a recording milliseconds old - under min_record_seconds,
+        so it was silently discarded with no lamp having lit at all.
+        Looked exactly like a dead button.
+
+        Backgrounding it accepts a small chance the very first moment of a
+        recording/playback happens at the previous levels rather than
+        freshly-reapplied ones, which is a far smaller cost than blocking
+        the button/lamp response for seconds.
+        """
+        self._levels_task = asyncio.create_task(self._reapply_levels())
+
     # -- recording -------------------------------------------------------
 
     async def start_recording(self) -> Path:
@@ -70,6 +157,7 @@ class AudioEngine:
         if self._record_proc is not None:
             raise AudioError("a recording is already running")
         _require("arecord")
+        self._kick_off_levels_reapply()
         target = self.work_dir / f"rec-{int(time.time() * 1000)}.wav"
         # -d caps the capture so a jammed button cannot record forever
         # (requirement 4); arecord exits cleanly on its own at the limit.
@@ -129,16 +217,20 @@ class AudioEngine:
     # -- encoding --------------------------------------------------------
 
     async def encode_voice_note(self, wav_path: Path) -> Path:
-        """Transcode a captured WAV to Ogg/Opus for sending as a voice note."""
+        """Transcode a captured WAV to AAC/M4A for sending as a voice note."""
         _require("ffmpeg")
-        target = wav_path.with_suffix(".ogg")
+        target = wav_path.with_suffix(".m4a")
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-nostdin", "-y",
             "-i", str(wav_path),
             "-ac", "1",
-            "-c:a", "libopus",
-            "-b:a", OPUS_BITRATE,
-            "-application", "voip",
+            # A far-field mic picking up a child at an unpredictable
+            # distance produces uneven levels - dynaudnorm adaptively boosts
+            # quiet stretches frame by frame instead of one flat gain, which
+            # would either leave quiet parts quiet or clip the loud ones.
+            "-af", "dynaudnorm",
+            "-c:a", "aac",
+            "-b:a", AAC_BITRATE,
             str(target),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
@@ -146,7 +238,7 @@ class AudioEngine:
         _, stderr = await proc.communicate()
         if proc.returncode != 0 or not target.exists():
             raise AudioError(
-                f"opus encode failed: {stderr.decode(errors='replace')[-400:]}"
+                f"aac encode failed: {stderr.decode(errors='replace')[-400:]}"
             )
         _unlink(wav_path)
         return target
@@ -163,6 +255,7 @@ class AudioEngine:
             log.error("ffplay not installed; cannot play audio")
             return False
         async with self._play_lock:
+            self._kick_off_levels_reapply()
             proc = await asyncio.create_subprocess_exec(
                 "ffplay", "-nodisp", "-autoexit", "-loglevel", "error",
                 "-volume", str(int(max(0.0, min(1.0, volume)) * 100)),

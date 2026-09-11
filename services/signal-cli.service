@@ -6,12 +6,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=voicemail
-Group=voicemail
-
 # Attachments are written here and read back by the phone service, so both
 # run as the same user.
-Environment=SIGNAL_CLI_CONFIG=/var/lib/little-voicemail/signal-cli
+User=voicemail
+Group=voicemail
 
 EnvironmentFile=/etc/little-voicemail/signal.env
 # Without an account there is nothing to run, and Restart=always would turn
@@ -19,6 +17,12 @@ EnvironmentFile=/etc/little-voicemail/signal.env
 # marks the unit skipped rather than failed and does not trigger a restart,
 # so the unit is safe to leave enabled between unlinking and relinking.
 ExecCondition=/usr/bin/test -n "${SIGNAL_ACCOUNT}"
+# --config here is the account data directory (keys, password, message
+# store) - do not also set a SIGNAL_CLI_CONFIG environment variable
+# pointing at this same path. That variable is a different thing entirely:
+# signal-cli treats it as a JSON *file* of CLI-option defaults, so pointing
+# it at a directory makes every startup fail with "Failed to load config
+# from <path>: <path> (Is a directory)".
 ExecStart=/usr/local/bin/signal-cli \
     --config /var/lib/little-voicemail/signal-cli \
     -a ${SIGNAL_ACCOUNT} \
