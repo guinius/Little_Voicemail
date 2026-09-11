@@ -130,16 +130,29 @@ class LedController:
         selected: int | None,
         pending: dict[int, int],
         muted: bool = False,
+        sending: frozenset[int] | set[int] = frozenset(),
     ) -> None:
         """Set all six contact lamps from the app's current state.
 
-        Selected wins over pending: while a contact is chosen its lamp is
-        steady, even if that same contact also has unheard messages. During
-        quiet time every contact lamp is dark regardless of what is waiting.
+        This runs on every refresh - a new selection, an incoming message,
+        another contact's send finishing - and always recomputes every
+        lamp from scratch, so a slot mid-send needs to say so here rather
+        than being poked directly, or the next unrelated refresh would
+        silently cut its blink short.
+
+        Precedence: muted darkens everything regardless of what else is
+        going on. Otherwise a contact with a send in flight blinks - "still
+        going" is the most useful thing that lamp can say, including on the
+        rare occasion it is also freshly selected again for another
+        message. Selected then wins over pending as before: while a
+        contact is chosen its lamp is steady, even if that same contact
+        also has unheard messages.
         """
         for slot in ALL_CONTACTS:
             if muted:
                 self._patterns[slot] = OFF
+            elif slot in sending:
+                self._patterns[slot] = blink(period=1.5, duty=0.5)
             elif slot == selected:
                 self._patterns[slot] = solid()
             elif pending.get(slot):
