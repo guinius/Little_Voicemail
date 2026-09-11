@@ -115,6 +115,7 @@ class Config:
     def __init__(self, path: str | os.PathLike):
         self.path = Path(path)
         self._lock = threading.RLock()
+        self._mtime: int | None = None
         self._data = self.load()
 
     def load(self) -> dict[str, Any]:
@@ -139,7 +140,25 @@ class Config:
             self._normalise()
             if self._migrate_quiet_time_labels():
                 self.save()
+            self._mtime = self._disk_mtime()
             return self._data
+
+    def _disk_mtime(self) -> int | None:
+        try:
+            return self.path.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _reload_if_changed(self) -> None:
+        """Pick up edits saved by another process (the web UI runs as its
+        own process - see the module docstring). Without this, a contact
+        changed from the web UI would keep going to the old number until
+        the phone service was restarted, because each process only read
+        the config file once at startup."""
+        with self._lock:
+            current = self._disk_mtime()
+            if current is not None and current != self._mtime:
+                self.load()
 
     def _migrate_quiet_time_labels(self) -> bool:
         """Rename a still-stock legacy quiet-time label; see the constants
@@ -193,16 +212,25 @@ class Config:
                 except OSError:
                     pass
                 raise
+            else:
+                # This process's own write; nothing to reload next time.
+                self._mtime = self._disk_mtime()
 
     # -- accessors -------------------------------------------------------
+    #
+    # Each of these picks up changes saved by another process first (see
+    # _reload_if_changed), so a contact edited from the web UI takes effect
+    # for the phone service immediately rather than after its next restart.
 
     @property
     def data(self) -> dict[str, Any]:
         with self._lock:
+            self._reload_if_changed()
             return self._data
 
     def get(self, *keys: str, default: Any = None) -> Any:
         with self._lock:
+            self._reload_if_changed()
             node: Any = self._data
             for key in keys:
                 if not isinstance(node, dict) or key not in node:
@@ -214,6 +242,10 @@ class Config:
         if not keys:
             raise ValueError("set() needs at least one key")
         with self._lock:
+            # Merge onto the latest on-disk state rather than blindly
+            # overwriting it, so this process doesn't clobber an edit the
+            # other process (phone service vs. web UI) made in the meantime.
+            self._reload_if_changed()
             node = self._data
             for key in keys[:-1]:
                 node = node.setdefault(key, {})
@@ -222,6 +254,7 @@ class Config:
 
     def contacts(self) -> list[dict[str, Any]]:
         with self._lock:
+            self._reload_if_changed()
             return [dict(c) for c in self._data["contacts"]]
 
     def contact(self, slot: int) -> dict[str, Any] | None:
@@ -229,6 +262,7 @@ class Config:
         if not 1 <= slot <= NUM_CONTACTS:
             return None
         with self._lock:
+            self._reload_if_changed()
             entry = self._data["contacts"][slot - 1]
             if not entry["enabled"] or not entry["number"]:
                 return None
@@ -240,6 +274,7 @@ class Config:
         if not target:
             return None
         with self._lock:
+            self._reload_if_changed()
             for entry in self._data["contacts"]:
                 if entry["enabled"] and _normalise_number(entry["number"]) == target:
                     return int(entry["slot"])
@@ -251,6 +286,7 @@ class Config:
         if not 1 <= slot <= NUM_CONTACTS:
             raise ValueError(f"slot must be 1-{NUM_CONTACTS}, got {slot}")
         with self._lock:
+            self._reload_if_changed()
             self._data["contacts"][slot - 1] = {
                 "slot": slot,
                 "name": name.strip(),
