@@ -11,13 +11,14 @@ project and points at a mic array.
 
 **Fourteen GPIO lines.** Six illuminated buttons plus push-to-talk is seven
 switches and seven lamps. Fourteen lines is more than the Pi can spare
-alongside the audio HAT once you want to keep a serial console, and seven
-lamps draw more current than the Pi's GPIO is allowed to supply. Both
+alongside the audio circuitry once you want to keep a serial console, and
+seven lamps draw more current than the Pi's GPIO is allowed to supply. Both
 problems are solved by one expander.
 
-Hence: audio on a HAT, buttons and lamps on a single I2C expander. The next
-section works through why, because "just use the Pi's own pins" is the
-obvious question and at seven buttons the answer is genuinely close.
+Hence: audio and buttons/lamps on one custom board, with buttons and lamps on
+a single I2C expander. The next section works through why, because "just use
+the Pi's own pins" is the obvious question and at seven buttons the answer is
+genuinely close.
 
 ## Why the MCP23017 stays
 
@@ -25,30 +26,27 @@ At ten buttons the expanders were unarguable — twenty lines simply did not
 exist. At seven the pin count alone no longer settles it, so the reasoning is
 worth writing down.
 
-### It costs zero GPIO pins
+### It costs almost no GPIO budget
 
-This is the part that settles it. The expander hangs off SDA/SCL — and the
-ReSpeaker HAT **already occupies I2C** for codec control. That bus is spent
-whether or not the expander is on it.
-
-So removing it frees nothing. It takes fourteen lines that currently cost no
-pin budget at all and moves them onto fourteen pins you would otherwise still
-have.
+The expander hangs off SDA/SCL, and nothing else on this board needs I2C — the
+audio chain below is entirely I2S. So the whole button-and-lamp panel costs
+two pins (SDA, SCL) versus fourteen direct GPIO. That is the part that settles
+it.
 
 ### The fourteen pins do exist
 
 Unlike at ten buttons, they genuinely fit. The Pi has 26 usable GPIO
-(BCM 2-27; 0 and 1 are the HAT ID EEPROM), and the HAT's unavoidable claim is
-only six of them — I2C (2, 3) and I2S (18-21). That leaves exactly twenty:
+(BCM 2-27; 0 and 1 are the HAT ID EEPROM), and audio's unavoidable claim is
+only six of them — I2C (2, 3) for the expander and I2S (18-21) for the codec.
+That leaves exactly twenty:
 
 ```
 4 5 6 7 8 9 10 11 12 13 14 15 16 17 22 23 24 25 26 27
 ```
 
-Fourteen of twenty, with six spare. You would have to spend SPI0 (7-11),
-which costs the HAT's three onboard RGB LEDs, but you could keep the UART
-console on 14/15 and stay clear of GPIO 17, which the HAT's own user button
-is wired to.
+Fourteen of twenty, with six spare. You would have to spend SPI0 (7-11) if you
+ever wanted it for something else, but you can keep the UART console on
+14/15 and stay clear of GPIO 17.
 
 So the pin-count objection is real but no longer decisive. What decides it is
 the next section.
@@ -88,8 +86,88 @@ One chip, zero pins and full brightness beats zero chips, fourteen pins and
 dim lamps. The expander is a DIP-28, a decoupling cap and a link to 3V3 — it
 is not the complicated part of this build.
 
-Note what dropping from ten buttons to seven *did* buy: the second expander
-and both ULN2803 driver arrays are gone. Four chips became one.
+## One custom board instead of a HAT-plus-expander stack
+
+The original design stacked a Seeed ReSpeaker 2-Mics Pi HAT (mics, codec, and
+a small onboard amp) under a custom MCP23017 button/lamp board. That combination
+shipped, worked, and is still a fine way to build this project without a PCB
+order. This document now describes replacing it with a **single custom HAT**
+that puts the speaker driver, microphones, and the MCP23017 button/lamp
+circuit on one board. Two things changed to justify the extra work:
+
+**The onboard amp was the actual ceiling, and it was already maxed out.**
+`little-voicemail-audio-levels.service` maxes every playback control the
+ReSpeaker's codec exposes on every boot, and the app-level volume defaults
+were tuned up separately (see the git history of `tools/set-audio-levels.sh`
+and the ringtone/mic-gain commits). None of that can go any further — the
+ReSpeaker's onboard class-D amp is rated **1 W**, full stop. Meanwhile the
+BOM has specified a **3 W** speaker the whole time. The amp was starving the
+speaker to a third of what it's rated for; no amount of software gain fixes
+that.
+
+**Building the button board anyway made the marginal cost of also carrying
+audio small.** The KiCad project already existed for the button/lamp half.
+Adding an amp IC and two mic connectors to it is a much smaller step than
+starting a board from nothing.
+
+### Why digital I2S, not a bigger analog amp bolted onto the same codec
+
+The obvious minimal fix is to keep the ReSpeaker's TLV320AIC3104 codec for
+mic capture (it works, and its driver overlay is already vendored in this
+repo) and just tap its line/headphone output into a separate, more powerful
+external Class-D amp. That is a perfectly valid path if you'd rather keep the
+existing driver story unchanged.
+
+This design goes further and drops the analog codec entirely, in favour of:
+
+- **[MAX98357A](https://www.digikey.com/en/products/detail/analog-devices-inc-maxim-integrated/MAX98357AETE-T/4936122)** —
+  I2S-in, Class-D amplifier **and** DAC in one chip. 3.2 W into 4 Ω at 5 V
+  (10% THD). No analog output stage to design.
+- **2x [ICS-43434](https://www.mouser.com/ProductDetail/Adafruit/6049)**
+  I2S digital MEMS microphones (as the Adafruit breakout module, not a bare
+  die on this board — see the note below on why). 65 dBA SNR, ±1 dB
+  sensitivity matching between units, so a stereo pair needs no per-unit
+  calibration.
+
+Reasoning:
+
+1. **It fixes the real bottleneck properly.** 3.2 W into a 3 W-rated speaker
+   is close to the speaker's actual limit rather than a third of it — the
+   mismatch that caused the complaint in the first place is gone, without
+   over-driving a small speaker or needing a supply rail above the Pi's
+   native 5 V.
+2. **Fewer analog failure modes.** No mic-bias network, no PLL/MCLK
+   configuration, no capture-gain tuning script fighting clipping headroom
+   (`CAPTURE_GAIN_FRACTION` in `tools/set-audio-levels.sh` goes away
+   entirely — the ICS-43434 is factory-trimmed and reports a fixed,
+   documented sensitivity).
+3. **It was the path I could verify.** Silicon-vendor datasheet hosts
+   (Analog Devices, Mouser, TI) were unreachable from this session's network
+   egress, so every pin assignment in the schematic below is cross-checked
+   against an independently published, working KiCad symbol
+   ([source](https://github.com/IMMRMKW/KICAD/blob/master/Max98357I2SMonoAmp.kicad_sym))
+   rather than typed from memory against a chip I couldn't look up. I was
+   **not** able to independently verify the ICS-43434's exact LGA pad
+   numbering the same way, which is exactly why the mic is specified as a
+   **pre-built, pre-verified breakout module** wired in over a header,
+   rather than a bare 3.5 x 2.65 mm part with a footprint I'd be guessing
+   the pad layout for. Fabricating a wrong LGA footprint from an unverified
+   guess is the kind of mistake that only shows up after the boards come
+   back, so this sidesteps it rather than risking it.
+
+### The one thing this trades away: a devicetree overlay to write
+
+The Pi's I2S peripheral is one hardware block. The ReSpeaker's codec did
+playback and capture through one chip, on one I2S bus, and its overlay just
+works. Running a separate playback-only chip (MAX98357A) and capture-only
+mics (the ICS-43434s) simultaneously on that same bus needs a
+`simple-audio-card`-style devicetree overlay with two DAI links — one
+playback link to a dummy "codec" that's really just the amp, one capture
+link the same way for the mics. This isn't invented for this project:
+HiFiBerry's DAC+ADC Pro does exactly this pairing (separate DAC and ADC
+chips presented as one card), and their overlay source is public to adapt.
+It's new work, not a drop-in `dtoverlay=`, and it's a software task to do
+**after** the board exists — it doesn't block ordering or assembling it.
 
 ## Choosing a board
 
@@ -155,67 +233,129 @@ core. There is also an experimental GraalVM native build of signal-cli that
 drops the JVM entirely, but ARM64 native-image builds are slow and finicky to
 produce, so it is not the recommended path.
 
+## Audio design
+
+### Signal chain
+
+```
+Pi I2S TX (GPIO21) ──▶ MAX98357A ──▶ speaker (3.2 W @ 4 Ω)
+Pi I2S RX (GPIO20) ◀── ICS-43434 x2 (TDM, shared BCLK/WS/SD)
+Pi I2C1 (GPIO2/3)  ◀▶ MCP23017 (buttons/lamps, address 0x20)
+```
+
+Playback and capture are two independent, unidirectional I2S links that
+happen to share the Pi's BCLK and LRCLK lines (both chips are I2S slaves,
+clocked by the Pi) but use separate data pins — DOUT (GPIO21) feeds the amp,
+DIN (GPIO20) reads the mics. Neither the MAX98357A nor the ICS-43434 needs an
+external MCLK; both derive their internal timing from BCLK/LRCLK, which is
+one of the reasons this pairing needs so few supporting parts.
+
+### MAX98357A (U2) — amplifier
+
+| Pin | Name | Connects to |
+|----:|------|-------------|
+| 1 | DIN | Pi GPIO21 (I2S DOUT) |
+| 2 | GAIN | Unconnected — default 9 dB. Strap to GND for 12 dB, or GND via 100 kΩ for 15 dB, if 9 dB proves too quiet once the speaker below is on it |
+| 3, 11, 15 | GND | GND |
+| 4 | SD_MODE | +3V3 (always enabled, left-channel output) |
+| 7, 8 | VDD | +5V |
+| 9 | OUTP | Speaker + |
+| 10 | OUTN | Speaker − |
+| 14 | LRCLK | Pi GPIO19 |
+| 16 | BCLK | Pi GPIO18 |
+| 5, 6, 12, 13 | N.C. | No connect |
+| 17 | Thermal pad | GND |
+
+Decoupling: 100 nF ceramic close to pins 7/8, plus a 10 µF bulk capacitor on
+the same rail — standard practice for a Class-D amp's supply pins, damps the
+switching-current transients the linear regulator alone won't.
+
+A future hardware-mute feature is easy to add later without a respin: SD_MODE
+could instead be driven from the MCP23017's spare **GPB7** pin (documented as
+unused in `hardware/README.md`) instead of tied straight to 3V3, giving the
+firmware a real hardware mute alongside the lamps it already drives. Not done
+in this revision, to keep the first board's bring-up simple — noted here so
+it isn't forgotten.
+
+### ICS-43434 x2 (mic breakouts) — microphones
+
+Wired as **Adafruit's I2S MEMS Microphone Breakout ([#6049](https://www.mouser.com/ProductDetail/Adafruit/6049))**,
+not a bare part on this board (see [above](#why-digital-i2s-not-a-bigger-analog-amp-bolted-onto-the-same-codec)
+for why). Each breakout carries its own decoupling; only these six signals
+per unit reach this board via a 1x6 2.54 mm pin header:
+
+| Breakout pin | Left mic (J9) | Right mic (J10) |
+|--------------|----------------|-------------------|
+| 3V / VIN | +3V3 | +3V3 |
+| GND | GND | GND |
+| SCK | Pi GPIO18 (shared) | Pi GPIO18 (shared) |
+| WS | Pi GPIO19 (shared) | Pi GPIO19 (shared) |
+| SD | Pi GPIO20 (shared) | Pi GPIO20 (shared) |
+| SEL (L/R) | GND (left slot) | +3V3 (right slot) |
+
+Both mics share one data line (Pi GPIO20) via I2S's time-division stereo
+slots — tying one breakout's SEL low and the other's high is what makes them
+answer in different slots on the same wire, exactly the trick the
+[ICS-43434 reference design](https://quickboards.org/documentation/ics-43434-i2s-microphone-reference-design/)
+uses for a stereo pair. Far-field pickup gets a small win from this too: two
+independently-placed mics feeding two channels is more directional
+information than the same two mics summed to mono would give the software.
+
+### Power budget
+
+| Load | Peak | Typical |
+|------|-----:|--------:|
+| MAX98357A into 4 Ω speaker | 3.2 W (~640 mA @ 5V, Class-D so real draw is lower) | well under during speech, which isn't a continuous tone |
+| 2x ICS-43434 | ~3 mA total | negligible |
+| MCP23017 + 7 lamps | 95 mA | as before |
+| Pi 4 itself | up to ~1.2 A | — |
+
+All comfortably inside the official 3 A USB-C supply's headroom; nothing here
+changes the "use the official supply" advice in [Power](#power) below.
+
 ## Bill of materials
 
-| Qty | Part | Approx. £ | Notes |
-|----:|------|----------:|-------|
-| 1 | Raspberry Pi 4 Model B, 2 GB | 45 | Pi Zero 2 W (~£15) also works and is plenty |
-| 1 | microSD card, 32 GB A1 | 6 | |
-| 1 | Official Pi USB-C PSU, 3 A | 8 | Do not skimp — the amp draws real current |
-| 1 | **ReSpeaker 2-Mics Pi HAT v2** | 12 | Dual far-field mics, TLV320AIC3104 codec, 1 W class-D amp, JST speaker out |
-| 1 | 3 W 4 Ω speaker, 40–50 mm | 4 | JST-PH 2.0 or solder to the pads |
-| 6 | 30 mm illuminated button, **bare LED** | 12 | Contact buttons. Bare-LED type, not a pre-wired 5 V module — see below |
-| 1 | 60 mm illuminated button, **bare LED** | 5 | The push-to-talk button — make it obviously the big one |
-| 1 | MCP23017 I²C GPIO expander, DIP-28 | 3 | Port A reads the switches, port B drives the lamps |
-| 7 | 220 Ω resistor, 0.25 W | 1 | One per lamp. Sets LED current; see [Lamps](#lamps--mcp23017-port-b) |
-| 1 | 100 nF ceramic capacitor | — | Decoupling, across the expander's VDD/VSS |
-| 1 | PCB or perfboard | 4 | See `hardware/little-voicemail.kicad_sch` |
-| 1 | 40-pin GPIO stacking header | 3 | To reach the pins the HAT sits on |
-| 7 | 4-way JST-XH connector + crimps | 4 | One per button: switch pair + lamp pair |
-| — | Hook-up wire, 2.8 mm spade connectors | 5 | If your buttons take spades rather than solder lugs |
-| 1 | Enclosure | 10–25 | Laser-cut ply or a project box; see below |
+| Qty | Part | Approx. £ | Source |
+|----:|------|----------:|--------|
+| 1 | Raspberry Pi 4 Model B, 2 GB (Pi Zero 2 W also works) | 45 | [The Pi Hut](https://thepihut.com/) |
+| 1 | microSD card, 32 GB A1 | 6 | any reputable brand |
+| 1 | Official Pi USB-C PSU, 3 A | 8 | [The Pi Hut](https://thepihut.com/) — do not skimp, the amp draws real current |
+| 1 | MCP23017-E/SP, DIP-28 | 3 | [Digi-Key](https://www.digikey.in/en/products/detail/microchip-technology/MCP23017-E-SP/MCP23017-E-SP-ND/894272) / [Mouser](https://www.mouser.com/ProductDetail/Microchip-Technology/MCP23017-E-SP) |
+| 1 | **MAX98357AETE+T**, TQFN-16 3x3mm, I2S Class-D amp | 3 | [Digi-Key MAX98357AETE-T](https://www.digikey.com/en/products/detail/analog-devices-inc-maxim-integrated/MAX98357AETE-T/4936122) |
+| 2 | **Adafruit I2S MEMS Microphone Breakout — ICS-43434** (#6049) | 6 each | [Mouser #6049](https://www.mouser.com/ProductDetail/Adafruit/6049) / [The Pi Hut](https://thepihut.com/products/adafruit-i2s-mems-microphone-breakout-ics-43434) |
+| 1 | **RS PRO Miniature Speaker, 4 Ω, 3 W, 40 mm dia.** | 3 | [RS 0102760](https://uk.rs-online.com/web/p/miniature-speakers/0102760) — SPL ≥85 dB, 0 Hz–20 kHz |
+| 6 | 30 mm illuminated button, **bare LED** | 12 | Arcade World UK, Pimoroni, The Pi Hut, or AliExpress in bulk |
+| 1 | 60 mm illuminated button, **bare LED** | 5 | as above — the push-to-talk button, make it obviously the big one |
+| 7 | 220 Ω resistor, 0.25 W | 1 | any distributor — sets lamp current, see [Lamps](hardware/README.md#resistor-sizing) |
+| 1 | 100 nF ceramic capacitor | — | MCP23017 decoupling |
+| 1 | 100 nF ceramic capacitor | — | MAX98357A supply decoupling, close to VDD pins |
+| 1 | 10 µF ceramic/tantalum capacitor | — | MAX98357A supply bulk decoupling |
+| 1 | PCB (this design) | ~10 for a small-batch run | schematic is in `hardware/little-voicemail.kicad_sch`; layout still needs doing in KiCad, see `hardware/README.md` |
+| 1 | 40-pin GPIO stacking header | 3 | The Pi Hut / Rapid |
+| 7 | 4-way JST-XH connector + crimps | 4 | one per button: switch pair + lamp pair |
+| 2 | 1x6 2.54 mm pin header (socket) | 1 | one per mic breakout |
+| — | Hook-up wire, 2.8 mm spade connectors | 5 | if your buttons take spades rather than solder lugs |
+| 1 | Enclosure | 10–25 | laser-cut ply or a project box; see [Enclosure](#enclosure) |
 
-**Total: roughly £115 for the Pi 4 build, or £85 with a Pi Zero 2 W.**
-
-> **Get the v2.0 HAT, and mind the driver advice you find online.** The v2.0
-> swapped the v1.0's WM8960 codec for the TLV320AIC3104 above, which is what
-> buys it Pi 5 support and 8–96 kHz. Both codecs have mainline kernel drivers,
-> so all either needs is a device-tree overlay: `respeaker-2mic-v2_0` for the
-> v2.0 — vendored in `tools/image/` and compiled by `install.sh`, because it
-> does not ship with Raspberry Pi OS — or the in-tree `wm8960-soundcard` for a
-> v1.0, selected with `LV_AUDIO_OVERLAY=wm8960-soundcard`.
->
-> Do **not** install Seeed's out-of-tree `seeed-voicecard` driver, and ignore
-> any guide telling you to set `dtoverlay=seeed-2mic-voicecard`. That driver
-> broke after kernel 5.10 and Seeed themselves have moved off it; the overlay
-> does not exist on a stock Raspberry Pi OS, so the line does nothing at all
-> and you get a Pi that boots with no sound card.
-
-### Where to buy
-
-- ReSpeaker HAT — [Seeed Studio](https://www.seeedstudio.com/ReSpeaker-2-Mics-Pi-HAT-v2.html), The Pi Hut, Pimoroni
-- Buttons — Arcade World UK, Pimoroni, The Pi Hut, or AliExpress in bulk.
-  Search "30mm illuminated arcade button", and check whether the LED is bare
-  or a pre-wired 5 V module before ordering
-- MCP23017, resistors, connectors — The Pi Hut, Rapid, Mouser
+**Total: roughly £115 for the Pi 4 build, £85 with a Pi Zero 2 W** — about the
+same as the ReSpeaker-based BOM, since the amp/mic/expander parts cost is
+similar; the difference is a PCB order instead of buying a pre-made HAT, and
+one fewer board to stack.
 
 ### Substitutions worth knowing about
 
-- **ReSpeaker 4-Mic Array** (~£25) — better pickup and a ring of 12 RGB LEDs,
-  but it uses more GPIO and has no onboard amplifier, so you would need a
-  separate amp board. Not worth it here.
-- **USB conference speakerphone** (Anker PowerConf, ~£60–90) — one USB plug,
-  excellent echo-cancelled mic, leaves every GPIO free. Genuinely the
-  easiest path if you do not mind the size and cost. Set `input_device` and
-  `output_device` in the config to the USB card and skip the HAT entirely.
-- **Cheap USB mic + powered speaker** (~£10) — works, but the pickup is poor
-  enough that a child has to lean in, which defeats the point.
-- **Pre-wired 5 V LED buttons** — most 30 mm arcade buttons ship with an LED
-  module that has its resistor built in and draws ~20 mA fixed. Seven of those
-  is 140 mA, which still fits the expander's 150 mA package limit but leaves
-  almost no margin. They work; you just lose the ability to tune brightness,
-  and the schematic's series resistors become links. Bare-LED buttons are the
-  better buy here.
+- **Keep the ReSpeaker HAT instead.** If you'd rather not do a PCB order at
+  all, the original stacked design (ReSpeaker 2-Mics Pi HAT v2 + this board's
+  earlier button-only revision) still works — see the amp-power caveat this
+  document opens with. `git log` before this revision has that BOM.
+- **PAM8302A instead of MAX98357A**, if you'd rather keep an analog signal
+  path (e.g. you're reusing a codec board that already outputs
+  line/headphone level audio). Mono, 2.5 W into 4 Ω, SO8, one gain-set
+  resistor — simpler IC, but needs an analog source, so it doesn't remove
+  the ICS-43434's win on the capture side.
+- **SPH0645LM4H-B** is the commonly-cited drop-in successor once ICS-43434
+  supply gets tight — same I2S/L-R-select interface, same breakout footprint
+  family. Worth checking availability before ordering.
 - **16 mm illuminated pushbuttons** (~£1.50 each) — electrically ideal: bare
   LED, you pick the current, and they are cheap. The objection is ergonomic.
   A 16 mm button has a ~12 mm cap, which is a fingertip-sized target for a
@@ -223,6 +363,12 @@ produce, so it is not the recommended path.
   smaller than 30 mm, 24 mm is the sensible floor — and keep the 60 mm
   push-to-talk whatever you do, since the design leans on it being
   unmistakable by feel.
+- **Pre-wired 5 V LED buttons** — most 30 mm arcade buttons ship with an LED
+  module that has its resistor built in and draws ~20 mA fixed. Seven of those
+  is 140 mA, which still fits the expander's 150 mA package limit but leaves
+  almost no margin. They work; you just lose the ability to tune brightness,
+  and the schematic's series resistors become links. Bare-LED buttons are the
+  better buy here.
 
 ## Wiring
 
@@ -232,8 +378,9 @@ produce, so it is not the recommended path.
 |------|----------|---------|---------|
 | MCP23017 | GND GND GND | `0x20` | Port A: seven switches. Port B: seven lamps |
 
-It shares SDA (GPIO 2) and SCL (GPIO 3) with the codec, which the ReSpeaker
-HAT passes through. Tie `RESET` (pin 18) to 3V3 — leaving it floating causes
+The MCP23017 is now the **only** device on the I2C bus — the audio chain
+below is entirely I2S, so there's no codec sharing SDA/SCL the way the
+ReSpeaker HAT's did. Tie `RESET` (pin 18) to 3V3 — leaving it floating causes
 intermittent resets that look like phantom button presses. Tie `A0`, `A1` and
 `A2` (pins 15, 16, 17) to GND for address `0x20`.
 
@@ -241,8 +388,8 @@ Do **not** add I²C pull-up resistors. The Pi already fits 1.8 kΩ pull-ups on
 SDA and SCL; another pair in parallel is unnecessary and pulls the bus harder
 than it needs.
 
-Check with `i2cdetect -y 1` — you should see `20`, alongside the codec's own
-address.
+Check with `i2cdetect -y 1` — you should see `20` and nothing else (no codec
+address to share the bus with any more).
 
 ### Buttons → MCP23017 port A
 
@@ -284,7 +431,8 @@ in positive logic.
 | Contact 6 | GPB5 | 6 |
 | **Push to talk** | GPB6 | 7 |
 
-GPB7 (pin 8) is unused.
+GPB7 (pin 8) is unused — see the [hardware-mute idea](#max98357a-u2--amplifier)
+above for a candidate future use.
 
 **Why sink rather than source.** The expander runs at 3.3 V and its output
 high sags under load, leaving nothing for a white or blue LED at ~3.0 V
@@ -308,54 +456,43 @@ is safe for every colour.
 > that look identical to 5 V ones. On 5 V they glow dimly or not at all. The
 > LED module usually unscrews and can be swapped for a bare LED.
 
-### Schematic
+### I2S → MAX98357A and mics
 
-`hardware/little-voicemail.kicad_sch` has the whole thing drawn up, ready to
-turn into a PCB. See [hardware/README.md](hardware/README.md) for the net list
-and board notes.
+| Signal | Pi header pin | Connects to |
+|--------|---------------|-------------|
+| BCLK | GPIO18 (physical pin 12) | MAX98357A pin 16, both mic breakouts' SCK |
+| LRCLK | GPIO19 (physical pin 35) | MAX98357A pin 14, both mic breakouts' WS |
+| I2S DOUT (Pi transmits) | GPIO21 (physical pin 40) | MAX98357A pin 1 (DIN) |
+| I2S DIN (Pi receives) | GPIO20 (physical pin 38) | both mic breakouts' SD, tied together |
 
 ### Speaker
 
-Solder to the ReSpeaker's JST 2.0 speaker pads, or use the 3.5 mm jack into
-a powered speaker if you prefer. Both are driven by the same onboard amp,
-already amplified — wire a raw speaker straight to the JST pads, no
-external amp needed. It gives 1 W into 8 Ω — loud enough for a bedroom, not
-for a garden.
+Driven directly by the MAX98357A's OUTP/OUTN — a filterless Class-D output,
+no external LC filter required for this application. Solder to a 2-pin
+JST-PH 2.0 or bare leads into the RS PRO 40 mm speaker above. It gives up to
+3.2 W into 4 Ω — noticeably louder than the 1 W the previous ReSpeaker-based
+design could deliver into the same speaker, because the amp is finally sized
+to what the speaker was always rated for.
 
-**If it sounds much quieter than that,** check the codec's own volume
-levels before suspecting the wiring. The TLV320AIC3x kernel driver's
-defaults leave real headroom unused on every boot — `PCM`, `HP DAC` and
-`Line DAC` playback volumes all come up around -23.5 dB below their own
-maximum, and the mic's `PGA Capture Volume` comes up around +16 dB out of a
-possible +59.5 dB — and nothing touches any of it otherwise, so a fresh
-boot is quiet on both playback and recording by default, not by fault.
-`install.sh` installs `little-voicemail-audio-levels.service`, a one-shot
-unit that maxes every `*Playback Volume` / `*Capture Volume` and unmutes
-every `*Playback Switch` / `*Capture Switch` control the card exposes, on
-every boot (see `tools/set-audio-levels.sh` — it discovers the controls by
-name rather than hardcoding TLV320AIC3104-specific ones, so it also covers
-a v1.0/WM8960 board). Playback goes all the way to its ceiling; capture
-gain deliberately doesn't — amplification ahead of the ADC clips on
-anything but a whisper if pushed too far, so `CAPTURE_GAIN_FRACTION` near
-the top of the script is a starting point (currently 60% of the control's
-range), not a value measured against real hardware. Raise it if recordings
-are still too quiet, lower it if they start clipping/distorting, then
-re-run the script - no reboot needed:
+### Schematic
 
-```bash
-sudo /opt/little-voicemail/tools/set-audio-levels.sh
-```
+`hardware/little-voicemail.kicad_sch` has the audio chain and the button/lamp
+board drawn up on one sheet — every symbol, pin, and net. There is no PCB
+layout file yet: see [hardware/README.md](hardware/README.md) for the net
+list, board notes, the mechanical spec to set up in KiCad (board outline,
+mounting holes, GPIO header position), and why the layout itself was left for
+KiCad rather than hand-authored here.
 
 ## Power
 
-The amp dominates here: seven lamps at 220 Ω add at most ~95 mA, but the
-class-D amp draws real current on peaks. Use the official 3 A supply. If
-lamps dim when several are lit at once, that is brownout, not a software
-bug — check the supply first.
+The amp dominates here, same as before: seven lamps at 220 Ω add at most
+~95 mA, but the Class-D amp draws real current on peaks. Use the official
+3 A supply. If lamps dim when several are lit at once, that is brownout, not
+a software bug — check the supply first.
 
 The lamps run off the header's **+5 V**, not 3V3, so they do not load the
-Pi's 3.3 V regulator. Only the expander itself sits on 3V3, at under a
-milliamp.
+Pi's 3.3 V regulator. The MCP23017 and both mic breakouts sit on 3V3, at well
+under a milliamp combined; the amp is the only new load of consequence on 5V.
 
 ## Enclosure
 
@@ -365,9 +502,10 @@ unmistakable by feel. Six in two rows of three suits a small child better
 than nine did: the same panel area gives more room around each target, and
 there is less to scan.
 
-Leave the mic openings clear — the ReSpeaker's two mics are at opposite edges
-of the board, and burying them behind a panel ruins the far-field pickup.
-Drill 3–4 mm holes directly over each one.
+Leave mic openings clear over both ICS-43434 breakouts — place them near
+opposite edges of the enclosure, the same far-field logic as the old
+ReSpeaker's two-mic placement. Drill 3–4 mm holes directly over each mic's
+port.
 
 Angle the top face back about 15°, so a child looking down at it sees the
 labels straight on.
