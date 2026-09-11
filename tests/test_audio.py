@@ -141,3 +141,65 @@ async def test_kick_off_levels_reapply_is_not_garbage_collected(tmp_path, monkey
     await asyncio.sleep(0.2)
 
     assert marker.exists()
+
+
+# -- encode_voice_note() -----------------------------------------------------
+
+
+class FakeFfmpegProcess:
+    """Stands in for a real ffmpeg subprocess - encode_voice_note() only
+    ever awaits communicate() and reads returncode."""
+
+    returncode = 0
+
+    async def communicate(self):
+        return b"", b""
+
+
+@pytest.mark.asyncio
+async def test_encode_voice_note_cuts_rumble_before_normalizing(tmp_path, monkeypatch):
+    """Regression coverage for the filter *order*, not just its presence:
+    highpass has to run before dynaudnorm, or dynaudnorm reads the room/
+    handling rumble it would otherwise remove as "quiet content" and boosts
+    it right along with the child's actual voice - see the comment by the
+    -af argument in audio.py."""
+    engine = make_engine(tmp_path)
+    wav = tmp_path / "rec.wav"
+    wav.write_bytes(b"RIFF")
+    captured = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        wav.with_suffix(".m4a").write_bytes(b"fake-m4a")
+        return FakeFfmpegProcess()
+
+    monkeypatch.setattr(audio_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await engine.encode_voice_note(wav)
+
+    args = captured["args"]
+    assert args[0] == "ffmpeg"
+    af = args[args.index("-af") + 1]
+    assert af.index("highpass") < af.index("dynaudnorm")
+
+
+@pytest.mark.asyncio
+async def test_encode_voice_note_uses_the_configured_bitrate(tmp_path, monkeypatch):
+    engine = make_engine(tmp_path)
+    wav = tmp_path / "rec.wav"
+    wav.write_bytes(b"RIFF")
+    captured = {}
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = args
+        wav.with_suffix(".m4a").write_bytes(b"fake-m4a")
+        return FakeFfmpegProcess()
+
+    monkeypatch.setattr(audio_module.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await engine.encode_voice_note(wav)
+
+    args = captured["args"]
+    assert args[args.index("-b:a") + 1] == audio_module.AAC_BITRATE

@@ -11,7 +11,10 @@ Behaviour, in the order a child experiences it:
     of selecting - you have to listen before you can reply.
   * Hold push-to-talk while a contact is selected. The PTT lamp lights and
     stays lit for as long as it records, up to a minute.
-  * Let go. The clip is encoded and sent as a Signal voice note.
+  * Let go. The clip is encoded and sent as a Signal voice note in the
+    background - the child can pick another contact and record again right
+    away rather than waiting for it to actually go out, up to MAX_OUTBOX
+    messages in flight at once (see _queue_send).
   * A message arriving plays the chosen ringtone and sets that contact's
     lamp flashing until it is heard - here or on a parent's own phone.
   * During quiet time none of that happens. Any press flashes all six
@@ -43,6 +46,15 @@ log = logging.getLogger(__name__)
 # with some to spare, short enough that a forgotten test mode does not
 # strand the device for the rest of the day.
 TEST_MODE_MAX_SECONDS = 600
+
+# How many recordings can be mid-encode/mid-send at once before a new
+# push-to-talk has to wait its turn. Below this, finishing a recording
+# hands it off to the background and the child can go straight back to
+# selecting another contact - see _queue_send(). It is a cap on background
+# work, not a size limit chosen for its own sake: five short voicemails
+# encoding/uploading at once is already more than this hardware would want
+# to be doing simultaneously.
+MAX_OUTBOX = 5
 
 
 class State(Enum):
@@ -86,10 +98,13 @@ class PhoneApp:
         self._busy = asyncio.Lock()
         self._was_quiet = self.quiet.is_quiet()
         self._tasks: list[asyncio.Task] = []
-        # Sending runs detached so the button loop stays responsive, but it
-        # is held onto so shutdown can wait for it instead of tearing the
-        # database out from under a half-finished send.
-        self._send_task: asyncio.Task | None = None
+        # Sending runs detached so the button loop stays responsive, and
+        # several can be in flight together (see MAX_OUTBOX/_queue_send) -
+        # each task is held onto, keyed to the slot it is sending for, so
+        # shutdown can wait for all of them instead of tearing the database
+        # out from under a half-finished send, and so LED rendering can
+        # tell which contacts still have a send outstanding.
+        self._send_tasks: dict[asyncio.Task, int] = {}
         # The last recording/encode/send failure, so a parent staring at the
         # System page can see *why* the lamp flashed instead of only that it
         # did - without going and finding journalctl. Cleared on the next
@@ -163,17 +178,21 @@ class PhoneApp:
         await self.audio.play(chime)
 
     async def wait_for_send(self, timeout: float = 10.0) -> None:
-        """Let an in-flight send finish (or give up) before tearing down."""
-        task = self._send_task
-        if task is None or task.done():
+        """Let any in-flight sends finish (or give up) before tearing down."""
+        tasks = [t for t in self._send_tasks if not t.done()]
+        if not tasks:
             return
         try:
-            await asyncio.wait_for(asyncio.shield(task), timeout)
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True), timeout
+            )
         except asyncio.TimeoutError:
-            log.warning("send did not finish within %.0fs; cancelling", timeout)
-            task.cancel()
-        except Exception:
-            log.debug("send task ended with an error", exc_info=True)
+            log.warning(
+                "%d send(s) did not finish within %.0fs; cancelling",
+                len(tasks), timeout,
+            )
+            for task in tasks:
+                task.cancel()
 
     # -- periodic --------------------------------------------------------
 
@@ -345,7 +364,10 @@ class PhoneApp:
             if not pending:
                 return
             self.state = State.PLAYING
-            self.hw.leds.apply_contact_states(selected=slot, pending={})
+            self.hw.leds.apply_contact_states(
+                selected=slot, pending={},
+                sending=frozenset(self._send_tasks.values()),
+            )
             log.info("playing %d message(s) from slot %s", len(pending), slot)
 
             async def retire(message):
@@ -422,38 +444,83 @@ class PhoneApp:
             self._clear_selection()
             return
 
-        self.state = State.SENDING
-        self._send_task = asyncio.create_task(
+        self._queue_send(slot, contact, recording)
+
+    def _queue_send(self, slot: int, contact: dict, recording) -> None:
+        """Hand a finished recording to the outbox for background encoding
+        and sending.
+
+        Below MAX_OUTBOX concurrent sends, the child can go straight back
+        to selecting another contact and recording again - state drops to
+        idle immediately rather than sitting on SENDING (which blocks any
+        new selection/recording, see _handle_contact_press/_start_recording)
+        for however long this send takes. Once MAX_OUTBOX are already in
+        flight, this falls back to the previous behaviour: stay busy until
+        one of them finishes and frees a slot (_on_send_done), so the
+        outbox itself can never grow past MAX_OUTBOX.
+        """
+        task = asyncio.create_task(
             self._send(slot, contact, recording), name=f"send-slot-{slot}"
         )
+        self._send_tasks[task] = slot
+        task.add_done_callback(self._on_send_done)
+
+        if len(self._send_tasks) >= MAX_OUTBOX:
+            self.state = State.SENDING
+            self._refresh_leds()  # picks up this slot's "sending" blink
+        else:
+            self.state = State.IDLE
+            self._clear_selection()
+
+    def _on_send_done(self, task: asyncio.Task) -> None:
+        """Reconcile shared state once one background send finishes.
+
+        Runs for every send, not just ones that filled the outbox - each
+        completion always needs the just-finished slot dropped from the
+        "sending" set so its lamp stops blinking, but must never touch
+        self.state/selection except in the one case those were actually
+        left pointing at this send (the outbox was full when it started).
+        Otherwise the app has long since moved on - possibly mid a new
+        recording - and clobbering state here would cut that short.
+        """
+        self._send_tasks.pop(task, None)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("send task ended unexpectedly", exc_info=task.exception())
+        if self.state is State.SENDING and len(self._send_tasks) < MAX_OUTBOX:
+            self.state = State.IDLE
+            self._clear_selection()  # also refreshes LEDs
+        else:
+            self._refresh_leds()
 
     async def _send(self, slot: int, contact: dict, recording) -> None:
-        """Encode and deliver, blinking the lamp slowly until it is on its
-        way - releasing the PTT button no longer leaves a steady "still
-        working" light, which read as stuck rather than in progress."""
-        async with self._busy:
-            self.hw.leds.set(slot, blink(period=1.5, duty=0.5))
+        """Encode and deliver one recording in the background.
+
+        Several of these can run at once (see _queue_send) - each only
+        touches its own contact's lamp state indirectly (through the
+        "sending" set _refresh_leds reads) plus its own exception handling
+        and file cleanup. None of it touches self.state or the current
+        selection directly, since those are shared across every in-flight
+        send; _on_send_done reconciles those centrally once this one ends.
+        """
+        try:
+            ogg = await self.audio.encode_voice_note(recording.path)
+            await self.signal.send_voice_note(contact["number"], ogg)
+            log.info(
+                "sent %.1fs voice note to %s (slot %s)",
+                recording.duration, contact["name"] or contact["number"], slot,
+            )
+            self._last_error = None  # a good send outweighs a stale complaint
+        except Exception as exc:
+            log.exception("failed to send voice note to slot %s", slot)
+            self._record_error(
+                f"send to slot {slot} failed: {type(exc).__name__}: {exc}"
+            )
+            await self._indicate_failure(slot)
+        finally:
             try:
-                ogg = await self.audio.encode_voice_note(recording.path)
-                await self.signal.send_voice_note(contact["number"], ogg)
-                log.info(
-                    "sent %.1fs voice note to %s (slot %s)",
-                    recording.duration, contact["name"] or contact["number"], slot,
-                )
-                self._last_error = None  # a good send outweighs a stale complaint
-            except Exception as exc:
-                log.exception("failed to send voice note to slot %s", slot)
-                self._record_error(
-                    f"send to slot {slot} failed: {type(exc).__name__}: {exc}"
-                )
-                await self._indicate_failure(slot)
-            finally:
-                try:
-                    Path(recording.path).with_suffix(".m4a").unlink(missing_ok=True)
-                except OSError:
-                    pass
-                self.state = State.IDLE
-                self._clear_selection()
+                Path(recording.path).with_suffix(".m4a").unlink(missing_ok=True)
+            except OSError:
+                pass
 
     async def _indicate_failure(self, slot: int) -> None:
         """Blink the contact's own lamp quickly so the child knows to retry."""
@@ -509,6 +576,7 @@ class PhoneApp:
             selected=self.selected_slot,
             pending=self.queue.pending_counts(),
             muted=self.quiet.is_quiet(),
+            sending=frozenset(self._send_tasks.values()),
         )
 
     # -- status for the web UI -------------------------------------------

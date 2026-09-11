@@ -1,7 +1,7 @@
 """Recording, encoding and playback.
 
 Recording uses `arecord` straight to WAV, then ffmpeg transcodes to mono
-AAC in an M4A container at 48 kbps - the format both Signal's iOS and
+AAC in an M4A container (see AAC_BITRATE) - the format both Signal's iOS and
 Android apps actually record their own voice notes in. Ogg/Opus looks like
 the more obvious choice (lower bitrate, Signal's own docs mention it,
 Android and Desktop play it fine) and was tried first, but Signal iOS has a
@@ -29,7 +29,11 @@ from .paths import PROJECT_ROOT
 log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 48000
-AAC_BITRATE = "48k"
+# 48k was the original bitrate - chosen to keep files small, not for
+# quality. AAC-LC gets audibly swirly/"underwater" on speech consonants
+# that low; 96k removes most of that while a minute of mono voice is
+# still well under a megabyte (96 kbps * 60s / 8 = ~720 KB).
+AAC_BITRATE = "96k"
 # See tools/set-audio-levels.sh. The ReSpeaker codec doesn't just default to
 # quiet at boot - it appears to reset its own playback/capture volume
 # registers back to those defaults whenever its analog stage powers back up
@@ -224,11 +228,17 @@ class AudioEngine:
             "ffmpeg", "-nostdin", "-y",
             "-i", str(wav_path),
             "-ac", "1",
-            # A far-field mic picking up a child at an unpredictable
-            # distance produces uneven levels - dynaudnorm adaptively boosts
-            # quiet stretches frame by frame instead of one flat gain, which
-            # would either leave quiet parts quiet or clip the loud ones.
-            "-af", "dynaudnorm",
+            # highpass first: the ReSpeaker's far-field mics pick up handling
+            # thumps, breath and room rumble well below where speech lives
+            # (voice fundamentals start around 100-150 Hz even for a small
+            # child), and doing this before dynaudnorm stops that rumble
+            # from being read as "quiet content" and boosted along with the
+            # actual voice. dynaudnorm second: a far-field mic picking up a
+            # child at an unpredictable distance produces uneven levels - it
+            # adaptively boosts quiet stretches frame by frame instead of one
+            # flat gain, which would either leave quiet parts quiet or clip
+            # the loud ones.
+            "-af", "highpass=f=100,dynaudnorm",
             "-c:a", "aac",
             "-b:a", AAC_BITRATE,
             str(target),

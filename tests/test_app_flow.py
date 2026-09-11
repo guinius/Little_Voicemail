@@ -79,6 +79,10 @@ class FakeSignal:
         self.on_voice_message = None
         self.on_read_receipt = None
         self.fail_next_send = False
+        # When set to an asyncio.Event, send_voice_note blocks on it instead
+        # of returning immediately - lets a test hold a "send" open to
+        # exercise the outbox while it is still in flight, then release it.
+        self.hold: object | None = None
 
     def start(self):
         pass
@@ -89,6 +93,8 @@ class FakeSignal:
     async def send_voice_note(self, recipient, path):
         if self.fail_next_send:
             raise ConnectionError("signal-cli is down")
+        if self.hold is not None:
+            await self.hold.wait()
         self.sent.append((recipient, str(path)))
         return 1234
 
@@ -352,6 +358,96 @@ async def test_full_send_flow(env):
 
     assert signal.sent == [(GRANDMA, "/tmp/fake.m4a")]
     assert app.selected_slot is None  # selection released after sending
+
+
+@pytest.mark.asyncio
+async def test_a_second_message_can_be_recorded_while_the_first_is_sending(env):
+    """The point of the outbox: finishing a recording hands it off in the
+    background so the child can go straight back to selecting another
+    contact, instead of the device sitting busy until the first message
+    has actually finished sending."""
+    app, _, audio, signal, _ = env
+    signal.hold = asyncio.Event()
+
+    await press(app, 1)
+    await ptt_down(app)
+    await ptt_up(app)
+    await asyncio.sleep(0)  # let slot 1's send task start and block on hold
+
+    assert app.state is State.IDLE
+    assert app.selected_slot is None
+    assert signal.sent == []  # still stuck on the hold
+
+    await press(app, 2)
+    assert app.selected_slot == 2
+    await ptt_down(app)
+    assert app.state is State.RECORDING
+    await ptt_up(app)
+
+    signal.hold.set()
+    await app.wait_for_send()
+
+    assert sorted(signal.sent) == [
+        (GRANDMA, "/tmp/fake.m4a"),
+        (UNCLE, "/tmp/fake.m4a"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_outbox_falls_back_to_blocking_once_it_is_full(env):
+    """Once MAX_OUTBOX sends are already in flight, a new recording waits
+    its turn - the same busy/blocking behaviour as before the outbox
+    existed - rather than growing the buffer further."""
+    from src.app import MAX_OUTBOX
+
+    app, _, audio, signal, _ = env
+    signal.hold = asyncio.Event()
+
+    for _ in range(MAX_OUTBOX):
+        await press(app, 1)
+        await ptt_down(app)
+        await ptt_up(app)
+
+    assert app.state is State.SENDING
+    assert app.selected_slot == 1  # frozen, same as a single in-flight send used to be
+    assert signal.sent == []
+
+    await press(app, 2)  # blocked: a full outbox behaves like the old SENDING state
+    assert app.selected_slot == 1
+    await ptt_down(app)
+    assert not audio.recording
+
+    signal.hold.set()
+    await app.wait_for_send()
+
+    assert app.state is State.IDLE
+    assert len(signal.sent) == MAX_OUTBOX
+
+
+@pytest.mark.asyncio
+async def test_listening_to_another_contact_does_not_stop_a_send_blink(env):
+    """apply_contact_states() recomputes every lamp from scratch on every
+    refresh - regression coverage for it being told about in-flight sends
+    everywhere it's called, not just from _refresh_leds(), so listening to
+    a different contact's pending messages doesn't silently cut short the
+    "still sending" blink on a contact whose message hasn't gone out yet."""
+    app, _, audio, signal, queue = env
+    signal.hold = asyncio.Event()
+
+    await press(app, 1)
+    await ptt_down(app)
+    await ptt_up(app)
+    await asyncio.sleep(0)
+
+    assert app.hw.leds._patterns[1].kind == "blink"
+
+    queue.add(slot=2, sender=UNCLE, signal_ts=1, attachment="/tmp/in.ogg")
+    await press(app, 2)  # plays slot 2's pending message instead of selecting
+
+    assert app.hw.leds._patterns[1].kind == "blink"  # slot 1's send survived
+
+    signal.hold.set()
+    await app.wait_for_send()
 
 
 @pytest.mark.asyncio
