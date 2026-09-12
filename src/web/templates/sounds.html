@@ -8,8 +8,9 @@
   <h2>Ringtone</h2>
   <p class="hint">
     Played when a voice message arrives &mdash; unless a quiet time is running.
-    Drop your own <code>.wav</code>, <code>.mp3</code> or <code>.ogg</code> files into
-    the <code>sounds/</code> folder on the device and they will show up here.
+    Upload your own below, or drop <code>.wav</code>, <code>.mp3</code> or
+    <code>.ogg</code> files straight into the <code>sounds/</code> folder on
+    the device and they will show up here.
   </p>
 
   {% if not ringtones %}
@@ -35,6 +36,20 @@
       <p class="hint" id="preview-status" hidden></p>
     </form>
   {% endif %}
+</div>
+
+<div class="card">
+  <h2>Add a custom sound</h2>
+  <p class="hint">
+    Upload your own ringtone &mdash; <code>.wav</code>, <code>.mp3</code> and
+    <code>.ogg</code> all work, so an mp3 you already have does not need to be
+    converted to WAV first. It shows up in the list above once uploaded.
+  </p>
+  <div class="actions" style="align-items:center">
+    <input type="file" id="sound-file" accept=".wav,.mp3,.ogg,audio/*">
+    <button type="button" id="upload-sound">Upload</button>
+  </div>
+  <p class="hint" id="upload-status" hidden></p>
 </div>
 {% endblock %}
 
@@ -75,6 +90,61 @@
         previewStatus.textContent = 'Could not play: ' + err;
       } finally {
         previewBtn.disabled = false;
+      }
+    });
+  }
+
+  const fileInput = document.getElementById('sound-file');
+  const uploadBtn = document.getElementById('upload-sound');
+  const uploadStatus = document.getElementById('upload-status');
+  const ringtoneSelect = document.getElementById('ringtone');
+
+  if (uploadBtn) {
+    uploadBtn.addEventListener('click', async () => {
+      const file = fileInput.files[0];
+      uploadStatus.hidden = false;
+      if (!file) {
+        uploadStatus.textContent = 'Choose a sound file first.';
+        return;
+      }
+      const form = new FormData();
+      form.append('file', file);
+      uploadBtn.disabled = true;
+      uploadStatus.textContent = 'Uploading...';
+      try {
+        const res = await fetch('{{ url_for("upload_sound") }}', {
+          method: 'POST',
+          body: form,
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const fallback = res.status === 413 ? 'That file is too large (2MB max).' : 'Could not upload that file.';
+          uploadStatus.textContent = body.error || fallback;
+          return;
+        }
+        uploadStatus.textContent = '"' + body.name + '" was added below.';
+        fileInput.value = '';
+        if (ringtoneSelect) {
+          // Rebuild the dropdown from the server's own list rather than just
+          // appending the one new name, so a page left open across an
+          // upload from another tab/device still ends up with the right set.
+          ringtoneSelect.innerHTML = '';
+          for (const name of body.ringtones) {
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            ringtoneSelect.appendChild(option);
+          }
+          ringtoneSelect.value = body.name;
+        } else {
+          // No ringtone selector was rendered because the folder was
+          // previously empty - reload so the whole card appears.
+          location.reload();
+        }
+      } catch (err) {
+        uploadStatus.textContent = 'Could not upload: ' + err;
+      } finally {
+        uploadBtn.disabled = false;
       }
     });
   }

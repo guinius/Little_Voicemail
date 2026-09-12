@@ -47,9 +47,12 @@ Then open:
 
 **https://littlevoicemail.local:8443**
 
-The certificate is self-signed and generated on the device, so your browser
-will warn once. That is expected — accept it. The connection is encrypted from
-then on, and the private key never leaves the Pi.
+The certificate is generated on the device by its own private certificate
+authority, so your browser will warn once. That is expected — accept it. The
+connection is encrypted from then on, and the private key never leaves the
+Pi. If you would rather make that warning go away for good, the login page
+has a link to install the device's certificate — a one-time step per phone
+or computer.
 
 ### If that page does not load
 
@@ -235,7 +238,15 @@ Read receipts have to be enabled on the account: Signal → Settings → Privacy
 You can always clear a queue from the web UI instead.
 
 **Locked out of the web UI**
-This one does need SSH:
+No SSH needed: hold contact buttons **1** and **2** together for 10 seconds.
+The lights flash quickly for about 3 seconds, then the device factory-resets
+— every setting, the linked Signal account and the saved WiFi network are
+gone, and it reboots straight back into first-run setup as if freshly
+flashed. There is no undo, so only do this if you are prepared to set the
+box up again.
+
+If you do have SSH and only want to clear the password without losing
+everything else:
 ```bash
 sudo -u voicemail /opt/little-voicemail/.venv/bin/python -c "
 import sys; sys.path.insert(0, '/opt/little-voicemail')

@@ -20,6 +20,8 @@ import re
 import secrets
 import shutil
 import subprocess
+import threading
+import time
 from functools import wraps
 from pathlib import Path
 
@@ -35,6 +37,7 @@ from flask import (
     url_for,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
 
 from ..audio import LEVELS_SCRIPT, AudioEngine, _playback_env
 from ..config import NUM_CONTACTS, Config
@@ -53,6 +56,7 @@ log = logging.getLogger(__name__)
 
 E164 = re.compile(r"^\+[1-9]\d{6,14}$")
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+ALLOWED_SOUND_EXTENSIONS = {".wav", ".mp3", ".ogg"}
 
 
 def create_app(
@@ -62,7 +66,8 @@ def create_app(
     linker: SignalLinker | None = None,
 ) -> Flask:
     app = Flask(__name__)
-    config = Config(config_path or default_config_path())
+    config_path = Path(config_path or default_config_path())
+    config = Config(config_path)
     data_dir = Path(data_dir or default_data_dir())
     sounds_dir = Path(sounds_dir or default_sounds_dir())
 
@@ -135,13 +140,43 @@ def create_app(
                 session["authenticated"] = True
                 # Nothing works until a Signal account is linked, so go
                 # straight there rather than to an empty status page.
-                return redirect(url_for("signal_page"))
+                return redirect(url_for("system", _anchor="signal-section"))
         return render_template("first_run.html")
 
     @app.route("/logout")
     def logout():
         session.clear()
         return redirect(url_for("login"))
+
+    @app.route("/certificate")
+    def certificate_page():
+        """Instructions for installing this device's CA certificate.
+
+        Deliberately not behind login: a parent hitting a browser security
+        warning on first connecting hasn't signed in yet, and this page is
+        what tells them what that warning is and how to make it go away for
+        good (GitHub issue #18). Nothing here is sensitive - a CA
+        certificate is public by design, the same as any website's.
+        """
+        return render_template("certificate.html")
+
+    @app.route("/ca.crt")
+    def download_ca_certificate():
+        # Deliberately data_dir / "certs" (the directory this app instance
+        # was actually constructed with) rather than paths.certs_dir(),
+        # which re-derives its own path from the environment independently -
+        # the same reason audio.work_dir and test_mode_flag above are built
+        # from the injected data_dir rather than calling default_data_dir()
+        # a second time. It's the one server.py itself writes to; see its
+        # own certs_dir() usage in ensure_ca()/ensure_certificate().
+        path = data_dir / "certs" / "ca.crt"
+        if not path.exists():
+            return jsonify({"error": "No certificate is available yet."}), 404
+        response = Response(path.read_bytes(), mimetype="application/x-x509-ca-cert")
+        response.headers["Content-Disposition"] = (
+            "attachment; filename=little-voicemail-ca.crt"
+        )
+        return response
 
     # -- pages -----------------------------------------------------------
 
@@ -246,6 +281,45 @@ def create_app(
             return jsonify({"error": detail}), 500
         return jsonify({"ok": True})
 
+    @app.route("/api/sounds/upload", methods=["POST"])
+    @login_required
+    def upload_sound():
+        """Add a custom ringtone so it shows up in the Sounds dropdown.
+
+        .wav, .mp3 and .ogg are all accepted and need no conversion between
+        them: playback (audio.py's ffplay call) and the ffprobe check below
+        decode all three the same way, so an mp3 a parent already has plays
+        exactly like a .wav ringtone would - it does not need to be turned
+        into one first.
+        """
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            return jsonify({"error": "Choose a sound file first."}), 400
+
+        filename = secure_filename(upload.filename)
+        suffix = Path(filename).suffix.lower()
+        if not filename or suffix not in ALLOWED_SOUND_EXTENSIONS:
+            return jsonify(
+                {"error": "Only .wav, .mp3 or .ogg files can be used as a ringtone."}
+            ), 400
+
+        sounds_dir.mkdir(parents=True, exist_ok=True)
+        target = _unique_sound_path(sounds_dir, filename)
+        staging = target.with_name(target.name + ".uploading")
+        try:
+            upload.save(staging)
+        except OSError as exc:
+            return jsonify({"error": f"Could not save the file: {exc}"}), 500
+
+        error = _validate_sound_file(staging)
+        if error:
+            staging.unlink(missing_ok=True)
+            return jsonify({"error": error}), 400
+
+        staging.replace(target)
+        log.info("parent uploaded custom sound %s", target.name)
+        return jsonify({"name": target.name, "ringtones": audio.available_ringtones()})
+
     @app.route("/quiet-times", methods=["GET", "POST"])
     @login_required
     def quiet_times():
@@ -266,42 +340,35 @@ def create_app(
     @app.route("/signal", methods=["GET"])
     @login_required
     def signal_page():
-        return render_template(
-            "signal.html",
-            account=linker.account,
-            link=linker.snapshot(),
-            services=linker.service_states(),
-            signal_cli=linker.available,
-            # The systemd unit can say "active" while the phone service's own
-            # JSON-RPC socket to it is down (or vice versa mid-restart) - show
-            # the same live figure the Status and System pages use so the
-            # three don't tell three different stories.
-            status=_device_status(data_dir),
-        )
+        # The Signal tab was folded into System (fewer tabs to hunt through);
+        # this stays only so an old bookmark or link still lands somewhere.
+        return redirect(url_for("system", _anchor="signal-section"))
+
+    @app.route("/button-test", methods=["GET"])
+    @login_required
+    def button_test():
+        # Same story: button test moved under System -> Advanced.
+        return redirect(url_for("system", advanced=1, _anchor="advanced-section"))
 
     @app.route("/system", methods=["GET"])
     @login_required
     def system():
+        status = _device_status(data_dir)
         return render_template(
             "system.html",
             update=updater.check(force=request.args.get("recheck") == "1"),
             progress=updater.progress,
             version=updater.local_version(),
             account=config.get("signal", "account", default=""),
-            status=_device_status(data_dir),
-            recent=queue.recent(limit=25),
-            audio_diag=_audio_diagnostics(config),
-        )
-
-    @app.route("/button-test", methods=["GET"])
-    @login_required
-    def button_test():
-        status = _device_status(data_dir)
-        return render_template(
-            "button_test.html",
-            active=test_mode_flag.exists(),
             status=status,
-            rows=_button_test_rows(status),
+            audio_diag=_audio_diagnostics(config),
+            # -- merged from the old Signal tab --
+            link=linker.snapshot(),
+            services=linker.service_states(),
+            signal_cli=linker.available,
+            # -- merged from the old Button test tab --
+            test_active=test_mode_flag.exists(),
+            button_rows=_button_test_rows(status),
         )
 
     @app.route("/api/button-test/start", methods=["POST"])
@@ -318,6 +385,32 @@ def create_app(
         test_mode_flag.unlink(missing_ok=True)
         log.info("parent stopped button test mode")
         return jsonify({"active": False})
+
+    @app.route("/api/factory-reset", methods=["POST"])
+    @login_required
+    def api_factory_reset():
+        """Wipe every setting and reboot into first-run setup.
+
+        The same destructive action the button-1+2 hardware combo triggers
+        (see PhoneApp._check_factory_reset_combo) - this is just the other
+        door into it, for a parent who would rather use the web UI. Typing
+        the word is the confirmation; there is no undo once this starts.
+        """
+        confirm = _json_field(request, "confirm") or ""
+        if confirm.strip().upper() != "RESET":
+            return jsonify({"error": 'Type "RESET" to confirm.'}), 400
+
+        log.warning("parent triggered a factory reset from the web UI")
+
+        def run():
+            from .. import factory_reset
+
+            time.sleep(1)  # let the response below reach the browser first
+            factory_reset.wipe(config_path, data_dir)
+            factory_reset.reboot()
+
+        threading.Thread(target=run, daemon=True, name="factory-reset").start()
+        return jsonify({"started": True})
 
     # -- actions ---------------------------------------------------------
 
@@ -654,6 +747,48 @@ def _session_secret(data_dir: Path) -> bytes:
     path.write_bytes(secret)
     path.chmod(0o600)
     return secret
+
+
+def _unique_sound_path(sounds_dir: Path, filename: str) -> Path:
+    """Never clobber a built-in sound or an earlier upload of the same name."""
+    candidate = sounds_dir / filename
+    if not candidate.exists():
+        return candidate
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    n = 1
+    while (candidate := sounds_dir / f"{stem}-{n}{suffix}").exists():
+        n += 1
+    return candidate
+
+
+def _validate_sound_file(path: Path) -> str | None:
+    """Confirm an uploaded file actually decodes as audio.
+
+    Renaming a random file to ringtone.mp3 would otherwise sail through the
+    extension check above and only fail later, silently, the next time
+    something tries to play it. Uses ffprobe - part of the same ffmpeg
+    install audio.py already requires for encoding voice notes - to read
+    the file's own stream info rather than trusting its name. Skipped (not
+    failed) when ffprobe isn't on PATH, same as the other audio diagnostics:
+    a dev box or a not-yet-fully-installed one shouldn't block uploads it
+    simply can't check.
+    """
+    if not shutil.which("ffprobe"):
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a",
+                "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0", str(path),
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0 or "audio" not in result.stdout:
+        return "That doesn't look like a valid sound file."
+    return None
 
 
 def _clamp_float(value, low: float, high: float, fallback: float) -> float:

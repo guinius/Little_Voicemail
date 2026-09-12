@@ -1,5 +1,8 @@
 """Web UI: authentication gating and the settings forms."""
 
+import io
+import time
+
 import pytest
 from werkzeug.security import generate_password_hash
 
@@ -123,9 +126,18 @@ def test_system_page_renders_with_no_audio_tools_on_the_box(client):
     assert b"Audio &amp; tools" in response.data or b"Audio & tools" in response.data
 
 
-def test_button_test_page_renders(client):
+def test_button_test_page_redirects_to_system(client):
+    """Button test moved under System -> Advanced to cut down on tabs."""
     login(client)
     response = client.get("/button-test")
+    assert response.status_code == 302
+    assert "/system" in response.headers["Location"]
+    assert "advanced=1" in response.headers["Location"]
+
+
+def test_system_page_has_the_button_test_content(client):
+    login(client)
+    response = client.get("/system")
     assert response.status_code == 200
     assert b"Button test" in response.data
 
@@ -157,16 +169,76 @@ def test_stopping_button_test_removes_the_flag_file(client, paths):
     assert not flag.exists()
 
 
-def test_button_test_page_reflects_the_flag_file_on_load(client, paths):
+def test_system_page_reflects_the_flag_file_on_load(client, paths):
     login(client)
     _, data_dir, _ = paths
     (data_dir / "test_mode.flag").parent.mkdir(parents=True, exist_ok=True)
     (data_dir / "test_mode.flag").write_text("", encoding="utf-8")
 
-    response = client.get("/button-test")
+    response = client.get("/system")
 
     assert response.status_code == 200
     assert b"Stop test mode" in response.data
+
+
+def test_certificate_page_needs_no_login(client):
+    """A parent hitting the browser warning hasn't signed in yet."""
+    response = client.get("/certificate")
+    assert response.status_code == 200
+    assert b"Install the certificate" in response.data
+
+
+def test_ca_download_is_404_before_the_server_has_ever_started(client):
+    """The web test app never calls ensure_certificate()/ensure_ca() (those
+    live in server.py, exercised separately in test_certificate.py) - so on
+    a fresh temp dir there is no CA file yet, and this must say so rather
+    than 500."""
+    response = client.get("/ca.crt")
+    assert response.status_code == 404
+
+
+def test_ca_download_serves_the_certificate_once_present(client, paths):
+    _, data_dir, _ = paths
+    certs = data_dir / "certs"
+    certs.mkdir(parents=True, exist_ok=True)
+    (certs / "ca.crt").write_bytes(b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+
+    response = client.get("/ca.crt")
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/x-x509-ca-cert"
+    assert b"BEGIN CERTIFICATE" in response.data
+
+
+def test_factory_reset_requires_login(client):
+    assert client.post("/api/factory-reset", json={"confirm": "RESET"}).status_code == 401
+
+
+def test_factory_reset_requires_typing_reset(client):
+    login(client)
+    response = client.post("/api/factory-reset", json={"confirm": "nope"})
+    assert response.status_code == 400
+    assert "RESET" in response.get_json()["error"]
+
+
+def test_factory_reset_starts_when_confirmed(client, paths, monkeypatch):
+    login(client)
+    import src.factory_reset as factory_reset
+
+    calls = []
+    monkeypatch.setattr(factory_reset, "wipe", lambda *a, **k: calls.append("wipe"))
+    monkeypatch.setattr(factory_reset, "reboot", lambda: calls.append("reboot") or (True, ""))
+
+    response = client.post("/api/factory-reset", json={"confirm": "reset"})
+
+    assert response.status_code == 200
+    assert response.get_json()["started"] is True
+    # Runs in a background thread with a short delay - give it a moment.
+    for _ in range(50):
+        if calls == ["wipe", "reboot"]:
+            break
+        time.sleep(0.05)
+    assert calls == ["wipe", "reboot"]
 
 
 def test_button_test_apis_require_login(client):
@@ -255,6 +327,74 @@ def test_ringtone_selection_saves(client, paths):
     assert config.get("audio", "ringtone_volume") == 0.5
 
 
+def test_upload_requires_login(client):
+    response = client.post("/api/sounds/upload", data={})
+    assert response.status_code == 401
+
+
+def test_upload_rejects_no_file(client):
+    login(client)
+    response = client.post("/api/sounds/upload", data={})
+    assert response.status_code == 400
+    assert "Choose a sound file" in response.get_json()["error"]
+
+
+def test_upload_rejects_a_disallowed_extension(client):
+    login(client)
+    data = {"file": (io.BytesIO(b"not really audio"), "creepy.exe")}
+    response = client.post(
+        "/api/sounds/upload", data=data, content_type="multipart/form-data"
+    )
+    assert response.status_code == 400
+    assert ".wav, .mp3 or .ogg" in response.get_json()["error"]
+
+
+def test_uploading_a_wav_adds_it_to_the_dropdown(client, paths):
+    """No ffprobe on the test box, so the file just needs the right name and
+    extension - the same "skip, don't fail, when we can't check" rule the
+    audio diagnostics on the System page already follow."""
+    login(client)
+    data = {"file": (io.BytesIO(b"RIFF....WAVEfmt "), "lullaby.wav")}
+    response = client.post(
+        "/api/sounds/upload", data=data, content_type="multipart/form-data"
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["name"] == "lullaby.wav"
+    assert "lullaby.wav" in body["ringtones"]
+    _, _, sounds_dir = paths
+    assert (sounds_dir / "lullaby.wav").exists()
+
+
+def test_uploading_an_mp3_works_just_like_a_wav(client, paths):
+    """The point of item 1: an mp3 needs no special handling - it is
+    accepted, saved, and offered in the dropdown the same as a .wav."""
+    login(client)
+    data = {"file": (io.BytesIO(b"ID3\x03\x00\x00\x00fake mp3 bytes"), "chime.mp3")}
+    response = client.post(
+        "/api/sounds/upload", data=data, content_type="multipart/form-data"
+    )
+    assert response.status_code == 200
+    assert response.get_json()["name"] == "chime.mp3"
+    _, _, sounds_dir = paths
+    assert (sounds_dir / "chime.mp3").exists()
+
+
+def test_uploading_a_duplicate_name_does_not_overwrite(client, paths):
+    login(client)
+    _, _, sounds_dir = paths
+    data1 = {"file": (io.BytesIO(b"first"), "hello.wav")}
+    client.post("/api/sounds/upload", data=data1, content_type="multipart/form-data")
+    data2 = {"file": (io.BytesIO(b"second"), "hello.wav")}
+    response = client.post(
+        "/api/sounds/upload", data=data2, content_type="multipart/form-data"
+    )
+    assert response.status_code == 200
+    assert response.get_json()["name"] == "hello-1.wav"
+    assert (sounds_dir / "hello.wav").read_bytes() == b"first"
+    assert (sounds_dir / "hello-1.wav").read_bytes() == b"second"
+
+
 def test_preview_requires_login(client):
     response = client.post("/api/sounds/preview", json={"name": "chime.wav"})
     assert response.status_code == 401
@@ -296,7 +436,7 @@ def test_first_run_sets_a_password_and_leads_to_linking(tmp_path):
     )
     assert Config(config_path).get("web", "password_hash")
     # Nothing works without a Signal account, so that is the next step.
-    assert response.headers["Location"].endswith("/signal")
+    assert response.headers["Location"].endswith("/system#signal-section")
     assert client.get("/").status_code == 200
 
 
@@ -322,9 +462,17 @@ def test_first_run_rejects_a_short_password(tmp_path):
 # -- the Signal page -------------------------------------------------------
 
 
-def test_signal_page_offers_linking_when_unlinked(client):
+def test_signal_page_redirects_to_system(client):
+    """The Signal tab was folded into System to cut down on tabs."""
     login(client)
     response = client.get("/signal")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/system#signal-section")
+
+
+def test_system_page_offers_linking_when_unlinked(client):
+    login(client)
+    response = client.get("/system")
     assert response.status_code == 200
     assert b"Link a Signal account" in response.data
 
@@ -333,13 +481,13 @@ def test_an_unlinked_device_says_so_on_every_page(client):
     login(client)
     assert b"No Signal account is linked" in client.get("/").data
     # ...except on the page that fixes it.
-    assert b"No Signal account is linked" not in client.get("/signal").data
+    assert b"No Signal account is linked" not in client.get("/system").data
 
 
-def test_signal_page_shows_the_account_once_linked(tmp_path):
+def test_system_page_shows_the_account_once_linked(tmp_path):
     client = build_client(tmp_path / "config.json", tmp_path, account="+447700900123")
     login(client)
-    response = client.get("/signal")
+    response = client.get("/system")
     assert b"+447700900123" in response.data
     assert b"Unlink this device" in response.data
     assert b"No Signal account is linked" not in client.get("/").data

@@ -307,6 +307,84 @@ async def test_a_stale_flag_file_from_a_previous_run_does_not_survive_startup(en
             pass
 
 
+# -- factory reset ---------------------------------------------------------
+
+
+def test_combo_does_nothing_before_the_full_hold(env):
+    app, *_ = env
+    app.hw.buttons._pressed_at[1] = 1000.0 - 9.0
+    app.hw.buttons._pressed_at[2] = 1000.0 - 9.0
+
+    app._check_factory_reset_combo(now=1000.0)
+
+    assert app._factory_reset_triggered is False
+
+
+def test_combo_needs_both_buttons(env):
+    app, *_ = env
+    app.hw.buttons._pressed_at[1] = 1000.0 - 20.0
+    # slot 2 not held at all
+
+    app._check_factory_reset_combo(now=1000.0)
+
+    assert app._factory_reset_triggered is False
+
+
+def test_combo_times_from_the_later_of_the_two_presses(env):
+    """Both buttons have to be held together for the full duration - one
+    held for ages while the other only just joined does not count."""
+    app, *_ = env
+    app.hw.buttons._pressed_at[1] = 1000.0 - 30.0
+    app.hw.buttons._pressed_at[2] = 1000.0 - 5.0
+
+    app._check_factory_reset_combo(now=1000.0)
+
+    assert app._factory_reset_triggered is False
+
+
+@pytest.mark.asyncio
+async def test_combo_triggers_a_factory_reset_after_the_full_hold(env, monkeypatch):
+    app, *_ = env
+    app.hw.buttons._pressed_at[1] = 1000.0 - 10.0
+    app.hw.buttons._pressed_at[2] = 1000.0 - 10.0
+    called = []
+    monkeypatch.setattr(app, "_run_factory_reset", lambda: called.append(True) or _noop())
+
+    app._check_factory_reset_combo(now=1000.0)
+    await asyncio.sleep(0)
+
+    assert app._factory_reset_triggered is True
+    assert called == [True]
+    # A repeat tick while the buttons are still held must not fire twice.
+    app._check_factory_reset_combo(now=1000.1)
+    await asyncio.sleep(0)
+    assert called == [True]
+
+
+async def _noop():
+    pass
+
+
+@pytest.mark.asyncio
+async def test_factory_reset_flashes_then_wipes_and_reboots(env, monkeypatch):
+    app, *_ = env
+    calls = []
+
+    async def fake_flash(times, on, off):
+        calls.append(("flash", times, on, off))
+
+    monkeypatch.setattr(app.hw.leds, "flash_all", fake_flash)
+    monkeypatch.setattr("src.factory_reset.wipe", lambda *a, **k: calls.append(("wipe",)))
+    monkeypatch.setattr(
+        "src.factory_reset.reboot", lambda: calls.append(("reboot",)) or (True, "")
+    )
+
+    await app._run_factory_reset()
+
+    # Flashed first (so the wipe can't be missed), then wiped, then rebooted.
+    assert calls == [("flash", 15, 0.1, 0.1), ("wipe",), ("reboot",)]
+
+
 # -- selection -----------------------------------------------------------
 
 

@@ -2,9 +2,17 @@
 
 Requirement 8 is "connect securely from a device on the same local network".
 There is no public hostname to get a real certificate for, so the box mints
-its own self-signed certificate at first boot, valid for its hostname, its
-.local mDNS name and its LAN address. Browsers will warn once; a parent
-accepts it and the connection is encrypted from then on.
+its own private certificate authority (CA) at first boot, unique to that
+device, and signs its own server certificate with it - valid for its
+hostname, its .local mDNS name and its LAN address. A browser that has never
+seen this device's CA still warns once, exactly as it would for a plain
+self-signed certificate; the difference is that a parent can install the CA
+certificate itself (served at GET /ca.crt, with instructions on the
+/certificate page) on their phone or computer once, after which every future
+visit is fully trusted with no warning at all - the same padlock a public
+website gets, because a local CA is exactly what a public CA is, just one
+this box made for itself instead of buying from someone browsers already
+trust (see GitHub issue #18).
 
 Plain HTTP is not served at all - only a redirect listener that bounces to
 the HTTPS port, so a mistyped http:// never sends the parent password in
@@ -33,6 +41,13 @@ from .app import create_app
 log = logging.getLogger("little_voicemail.web")
 
 CERT_VALID_DAYS = 3650
+# Long-lived on purpose: reissuing the CA would silently untrust every
+# device a parent has already installed the old one on, with no way to
+# tell them short of the browser warning coming back. A device-specific
+# private CA carries none of the reasons a *publicly* trusted CA keeps its
+# lifetime short (mass revocation blast radius, browser policy) - it is
+# trusted by exactly the devices one parent chose to trust it on.
+CA_VALID_DAYS = 3650 * 3
 
 
 def local_ip() -> str:
@@ -81,30 +96,135 @@ def _certificate_covers(cert_path: Path, dns: list[str], addresses: list[str]) -
     return set(dns) <= have_dns and set(addresses) <= have_ips
 
 
-def ensure_certificate(hostname: str) -> tuple[Path, Path]:
-    """Return (cert, key), generating a self-signed pair if needed.
+def ensure_ca() -> tuple[Path, Path]:
+    """Return (cert, key) for this device's own certificate authority,
+    generating one the first time it's needed.
 
-    Regenerated when the box has become reachable by a name or address the
-    existing certificate does not cover - a new DHCP lease, an Imager-set
-    hostname, or a first start that happened while the setup hotspot was up
-    and the only address was the hotspot's own.
+    One CA per device, made once and kept forever (see CA_VALID_DAYS) - a
+    parent who installs it on a phone trusts *this box*, not every Little
+    Voicemail device everywhere, which is exactly what a device-specific CA
+    key (rather than one baked into the software and shared by every
+    install) buys: installing it on your own phone couldn't accidentally
+    trust someone else's box even if you wanted it to.
     """
     directory = certs_dir()
     directory.mkdir(parents=True, exist_ok=True)
-    cert_path = directory / "server.crt"
-    key_path = directory / "server.key"
-    dns_names, addresses = certificate_names(hostname)
-    if cert_path.exists() and key_path.exists():
-        if _certificate_covers(cert_path, dns_names, addresses):
-            return cert_path, key_path
-        log.info("the certificate no longer covers this box; making a new one")
+    ca_cert_path = directory / "ca.crt"
+    ca_key_path = directory / "ca.key"
 
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.x509.oid import NameOID
 
-    log.info("generating a self-signed certificate for %s", hostname)
+    if ca_cert_path.exists() and ca_key_path.exists():
+        try:
+            x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
+            serialization.load_pem_private_key(ca_key_path.read_bytes(), password=None)
+            return ca_cert_path, ca_key_path
+        except Exception:
+            log.warning("this device's CA certificate is unreadable; making a new one")
+
+    log.info("generating this device's own certificate authority")
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, "Little Voicemail Local CA"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Little Voicemail"),
+        ]
+    )
+    now = dt.datetime.now(dt.timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(days=1))
+        .not_valid_after(now + dt.timedelta(days=CA_VALID_DAYS))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False, content_commitment=False,
+                key_encipherment=False, data_encipherment=False,
+                key_agreement=False, key_cert_sign=True, crl_sign=True,
+                encipher_only=False, decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+
+    ca_key_path.write_bytes(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    ca_key_path.chmod(0o600)
+    ca_cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    return ca_cert_path, ca_key_path
+
+
+def _leaf_signed_by_ca(cert_path: Path, ca_cert_path: Path) -> bool:
+    """True if the certificate at `cert_path` was actually signed by the CA
+    at `ca_cert_path` - not just issued by something with a matching name.
+
+    Needed so a certificate minted before this device had a CA (an older
+    self-signed one from before this feature existed) gets regenerated
+    rather than kept just because it still covers the right names.
+    """
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives.asymmetric import padding
+
+        leaf = x509.load_pem_x509_certificate(cert_path.read_bytes())
+        ca_cert = x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
+        ca_cert.public_key().verify(
+            leaf.signature, leaf.tbs_certificate_bytes,
+            padding.PKCS1v15(), leaf.signature_hash_algorithm,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def ensure_certificate(hostname: str) -> tuple[Path, Path]:
+    """Return (cert, key) for the server's own certificate, signed by this
+    device's CA (see ensure_ca), generating one if needed.
+
+    Regenerated when the box has become reachable by a name or address the
+    existing certificate does not cover - a new DHCP lease, an Imager-set
+    hostname, or a first start that happened while the setup hotspot was up
+    and the only address was the hotspot's own - or when it wasn't actually
+    signed by the current CA at all.
+    """
+    directory = certs_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    ca_cert_path, ca_key_path = ensure_ca()
+    cert_path = directory / "server.crt"
+    key_path = directory / "server.key"
+    dns_names, addresses = certificate_names(hostname)
+    if cert_path.exists() and key_path.exists():
+        if _certificate_covers(cert_path, dns_names, addresses) and _leaf_signed_by_ca(
+            cert_path, ca_cert_path
+        ):
+            return cert_path, key_path
+        log.info("the certificate no longer matches this box or its CA; making a new one")
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    log.info("generating a certificate for %s, signed by this device's CA", hostname)
+    ca_cert = x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
+    ca_key = serialization.load_pem_private_key(ca_key_path.read_bytes(), password=None)
+
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = x509.Name(
         [
@@ -123,14 +243,14 @@ def ensure_certificate(hostname: str) -> tuple[Path, Path]:
     certificate = (
         x509.CertificateBuilder()
         .subject_name(subject)
-        .issuer_name(subject)
+        .issuer_name(ca_cert.subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - dt.timedelta(days=1))
         .not_valid_after(now + dt.timedelta(days=CERT_VALID_DAYS))
         .add_extension(x509.SubjectAlternativeName(alt_names), critical=False)
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-        .sign(key, hashes.SHA256())
+        .sign(ca_key, hashes.SHA256())
     )
 
     key_path.write_bytes(

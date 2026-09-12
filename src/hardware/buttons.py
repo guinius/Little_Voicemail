@@ -86,6 +86,15 @@ class ButtonReader:
     def is_held(self, slot: int) -> bool:
         return slot in self._pressed_at
 
+    def held_since(self, slot: int) -> float | None:
+        """Monotonic time `slot` was pressed, or None if it isn't held.
+
+        Exposed (rather than just `is_held`) for the factory-reset combo in
+        PhoneApp, which needs to know how long buttons 1 and 2 have been
+        held *together*, not just that they currently are.
+        """
+        return self._pressed_at.get(slot)
+
     async def _run(self) -> None:
         while True:
             try:
