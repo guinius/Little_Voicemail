@@ -195,22 +195,46 @@ def create_app(
             version=updater.local_version(),
         )
 
-    @app.route("/contacts", methods=["GET", "POST"])
+    @app.route("/contacts")
     @login_required
     def contacts():
-        if request.method == "POST":
-            errors = _save_contacts(config, request.form)
-            for message in errors:
-                flash(message, "error")
-            if not errors:
-                flash("Contacts saved.", "success")
-            return redirect(url_for("contacts"))
-        return render_template(
-            "contacts.html",
-            contacts=config.contacts(),
-            num_contacts=NUM_CONTACTS,
-            pending=queue.pending_counts(),
-        )
+        # Contacts moved onto the Status page - clicking a button tile there
+        # opens the same nickname/number/enabled editor this page used to be.
+        # Kept as a redirect rather than removed outright so an old bookmark
+        # still lands somewhere.
+        return redirect(url_for("index"))
+
+    @app.route("/api/contacts/<int:slot>", methods=["POST"])
+    @login_required
+    def api_save_contact(slot):
+        """Save one button's contact - the Status page's tile editor.
+
+        A dedicated per-slot endpoint rather than reusing _save_contacts()
+        (which expects every slot's fields in one form submission): the
+        Status page edits one tile's dropdown at a time, and posting only
+        that slot's fields through the old bulk endpoint would read every
+        other slot's missing fields as blanks and clear them.
+        """
+        if not 1 <= slot <= NUM_CONTACTS:
+            return jsonify({"error": "invalid slot"}), 404
+        name = (_json_field(request, "name") or "").strip()
+        number = (_json_field(request, "number") or "").strip().replace(" ", "")
+        enabled = bool(_json_field(request, "enabled"))
+
+        if not number:
+            config.clear_contact(slot)
+            return jsonify({"contact": config.contacts()[slot - 1]})
+        if not E164.match(number):
+            return jsonify(
+                {
+                    "error": f"'{number}' is not a valid international number "
+                    "(for example +447700900123)."
+                }
+            ), 400
+        if not name:
+            name = number
+        config.set_contact(slot, name, number, enabled)
+        return jsonify({"contact": config.contacts()[slot - 1]})
 
     @app.route("/sounds", methods=["GET", "POST"])
     @login_required
@@ -583,28 +607,6 @@ def create_app(
 
 
 # -- helpers -------------------------------------------------------------
-
-
-def _save_contacts(config: Config, form) -> list[str]:
-    errors: list[str] = []
-    for slot in range(1, NUM_CONTACTS + 1):
-        name = (form.get(f"name_{slot}") or "").strip()
-        number = (form.get(f"number_{slot}") or "").strip().replace(" ", "")
-        enabled = form.get(f"enabled_{slot}") == "on"
-
-        if not number:
-            config.clear_contact(slot)
-            continue
-        if not E164.match(number):
-            errors.append(
-                f"Button {slot}: '{number}' is not a valid international "
-                f"number (for example +447700900123)."
-            )
-            continue
-        if not name:
-            name = number
-        config.set_contact(slot, name, number, enabled)
-    return errors
 
 
 def _save_quiet_times(config: Config, form) -> list[str]:

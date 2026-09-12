@@ -246,13 +246,22 @@ def test_button_test_apis_require_login(client):
     assert client.post("/api/button-test/stop").status_code == 401
 
 
+def test_contacts_page_redirects_to_status(client):
+    """Contacts moved onto the Status page's button tiles."""
+    login(client)
+    response = client.get("/contacts")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/")
+
+
 def test_saving_a_contact_persists_it(client, paths):
     login(client)
-    client.post(
-        "/contacts",
-        data={"name_3": "Grandma", "number_3": "+447700900123", "enabled_3": "on"},
-        follow_redirects=True,
+    response = client.post(
+        "/api/contacts/3",
+        json={"name": "Grandma", "number": "+447700900123", "enabled": True},
     )
+    assert response.status_code == 200
+    assert response.get_json()["contact"]["name"] == "Grandma"
     config = Config(paths[0])
     assert config.contact(3)["name"] == "Grandma"
 
@@ -260,11 +269,11 @@ def test_saving_a_contact_persists_it(client, paths):
 def test_a_bad_number_is_refused(client, paths):
     login(client)
     response = client.post(
-        "/contacts",
-        data={"name_1": "Oops", "number_1": "07700900123", "enabled_1": "on"},
-        follow_redirects=True,
+        "/api/contacts/1",
+        json={"name": "Oops", "number": "07700900123", "enabled": True},
     )
-    assert b"not a valid international" in response.data
+    assert response.status_code == 400
+    assert "not a valid international" in response.get_json()["error"]
     assert Config(paths[0]).contact(1) is None
 
 
@@ -273,9 +282,20 @@ def test_blank_number_clears_the_slot(client, paths):
     config.set_contact(2, "Old", "+447700900999")
 
     login(client)
-    client.post("/contacts", data={"name_2": "", "number_2": ""}, follow_redirects=True)
+    client.post("/api/contacts/2", json={"name": "", "number": ""})
 
     assert Config(paths[0]).contact(2) is None
+
+
+def test_save_contact_requires_login(client):
+    response = client.post("/api/contacts/1", json={"name": "Oops", "number": ""})
+    assert response.status_code == 401
+
+
+def test_save_contact_rejects_an_out_of_range_slot(client):
+    login(client)
+    response = client.post("/api/contacts/9", json={"name": "X", "number": "+447700900123"})
+    assert response.status_code == 404
 
 
 def test_quiet_times_save(client, paths):

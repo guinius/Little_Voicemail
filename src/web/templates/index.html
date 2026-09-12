@@ -20,20 +20,53 @@
   <h2>Buttons</h2>
   <p class="hint">
     A glowing ring here means that contact has messages waiting on the device.
+    Tap a button to set who it calls.
   </p>
   <div class="pad">
     {% for contact in contacts %}
       {% set waiting = pending.get(contact.slot, 0) %}
-      <div class="key {% if contact.enabled %}set{% endif %} {% if waiting %}waiting{% endif %}">
+      <button type="button" class="key {% if contact.enabled %}set{% endif %} {% if waiting %}waiting{% endif %}"
+              data-slot="{{ contact.slot }}">
         <span class="num">{{ contact.slot }}</span>
         <span class="who">{{ contact.name or "not set" }}</span>
         {% if waiting %}<span class="count">{{ waiting }}</span>{% endif %}
-      </div>
+      </button>
     {% endfor %}
   </div>
+
+  <div class="contact-editor" id="contact-editor" hidden>
+    <div class="editor-head">
+      <strong id="editor-title">Button</strong>
+      <button type="button" class="close-editor" id="editor-close" aria-label="Close">&times;</button>
+    </div>
+    <label for="editor-name">Nickname</label>
+    <input type="text" id="editor-name" maxlength="24" placeholder="Grandma">
+
+    <div style="margin-top:.7rem">
+      <label for="editor-number">Signal number</label>
+      <input type="tel" id="editor-number" placeholder="+447700900123" pattern="\+[1-9][0-9]{6,14}">
+      <button type="button" class="ghost pick-contact" id="editor-pick" hidden style="margin-top:.4rem">
+        Choose from phone contacts
+      </button>
+    </div>
+
+    <div class="toggle" style="margin-top:.7rem">
+      <input type="checkbox" id="editor-enabled">
+      <label for="editor-enabled">Enabled</label>
+    </div>
+
+    <p class="hint" id="editor-waiting" hidden></p>
+    <p class="hint" id="editor-status" hidden></p>
+
+    <div class="actions">
+      <button type="button" id="editor-save">Save</button>
+      <button type="button" class="danger" id="editor-clear-queue" hidden>Clear waiting messages</button>
+    </div>
+  </div>
+
   <div class="actions">
-    <a class="btn ghost" href="{{ url_for('contacts') }}">Edit contacts</a>
     <button class="danger" id="reset-all" type="button">Clear all waiting messages</button>
+    <button type="button" class="ghost" id="import-names">Get nicknames from Signal</button>
   </div>
 </div>
 
@@ -84,6 +117,9 @@
 
 {% block scripts %}
 <script>
+  const CONTACTS = {{ contacts | tojson }};
+  const PENDING = {{ pending | tojson }};
+
   document.getElementById('reset-all').addEventListener('click', async (e) => {
     if (!confirm('Clear every waiting message? The lights will go out and the child will not hear them.')) return;
     const btn = e.currentTarget;
@@ -115,5 +151,173 @@
       btn.disabled = false;
     }
   });
+
+  document.getElementById('import-names').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = 'Asking Signal...';
+    try {
+      const res = await fetch('{{ url_for("api_contacts_import") }}', {method: 'POST'});
+      const body = await res.json();
+      if (!res.ok) {
+        alert('Could not reach Signal: ' + (body.error || 'unknown error'));
+      } else if (!body.updated.length) {
+        alert('No new nicknames found. Save the numbers first, and make sure they are in your Signal contacts.');
+      } else {
+        location.reload();
+        return;
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Get nicknames from Signal';
+    }
+  });
+
+  // -- per-button contact editor -----------------------------------------
+  const editor = document.getElementById('contact-editor');
+  const editorTitle = document.getElementById('editor-title');
+  const nameInput = document.getElementById('editor-name');
+  const numberInput = document.getElementById('editor-number');
+  const enabledInput = document.getElementById('editor-enabled');
+  const waitingHint = document.getElementById('editor-waiting');
+  const statusHint = document.getElementById('editor-status');
+  const saveBtn = document.getElementById('editor-save');
+  const clearQueueBtn = document.getElementById('editor-clear-queue');
+  const pickBtn = document.getElementById('editor-pick');
+  let openSlot = null;
+
+  function contactFor(slot) {
+    return CONTACTS.find((c) => c.slot === slot) || {name: '', number: '', enabled: false};
+  }
+
+  function openEditor(slot) {
+    openSlot = slot;
+    const contact = contactFor(slot);
+    editorTitle.textContent = 'Button ' + slot;
+    nameInput.value = contact.name || '';
+    numberInput.value = contact.number || '';
+    enabledInput.checked = !!contact.enabled;
+    statusHint.hidden = true;
+    const waiting = PENDING[slot] || 0;
+    if (waiting) {
+      waitingHint.hidden = false;
+      waitingHint.textContent = waiting + ' message' + (waiting === 1 ? '' : 's') + ' waiting on this button.';
+      clearQueueBtn.hidden = false;
+    } else {
+      waitingHint.hidden = true;
+      clearQueueBtn.hidden = true;
+    }
+    editor.hidden = false;
+    editor.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+    nameInput.focus();
+  }
+
+  function closeEditor() {
+    editor.hidden = true;
+    openSlot = null;
+  }
+
+  document.querySelectorAll('.pad .key').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const slot = parseInt(btn.dataset.slot, 10);
+      if (openSlot === slot) { closeEditor(); return; }
+      openEditor(slot);
+    });
+  });
+
+  document.getElementById('editor-close').addEventListener('click', closeEditor);
+
+  saveBtn.addEventListener('click', async () => {
+    if (openSlot === null) return;
+    saveBtn.disabled = true;
+    statusHint.hidden = false;
+    statusHint.textContent = 'Saving...';
+    try {
+      const res = await fetch('/api/contacts/' + openSlot, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          name: nameInput.value,
+          number: numberInput.value,
+          enabled: enabledInput.checked,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        statusHint.textContent = body.error || 'Could not save that contact.';
+        return;
+      }
+      const index = CONTACTS.findIndex((c) => c.slot === openSlot);
+      if (index >= 0) CONTACTS[index] = body.contact;
+      const tile = document.querySelector('.pad .key[data-slot="' + openSlot + '"]');
+      if (tile) {
+        tile.classList.toggle('set', !!body.contact.enabled);
+        tile.querySelector('.who').textContent = body.contact.name || 'not set';
+      }
+      statusHint.textContent = 'Saved.';
+      setTimeout(closeEditor, 600);
+    } catch (err) {
+      statusHint.textContent = 'Could not save: ' + err;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  clearQueueBtn.addEventListener('click', async () => {
+    if (openSlot === null) return;
+    clearQueueBtn.disabled = true;
+    try {
+      const res = await fetch('{{ url_for("reset_queue") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({slot: openSlot}),
+      });
+      if (res.ok) {
+        PENDING[openSlot] = 0;
+        const tile = document.querySelector('.pad .key[data-slot="' + openSlot + '"]');
+        if (tile) {
+          tile.classList.remove('waiting');
+          const count = tile.querySelector('.count');
+          if (count) count.remove();
+        }
+        waitingHint.hidden = true;
+        clearQueueBtn.hidden = true;
+      }
+    } finally {
+      clearQueueBtn.disabled = false;
+    }
+  });
+
+  // "Choose from phone contacts" fills the nickname and number fields from
+  // the browser's own contact list. Only Chrome on Android currently
+  // implements this (over HTTPS, which this app already is) - everywhere
+  // else the button stays hidden and the text boxes are the only way in.
+  if (navigator.contacts && navigator.contacts.select && window.ContactsManager) {
+    pickBtn.hidden = false;
+    pickBtn.addEventListener('click', async () => {
+      pickBtn.disabled = true;
+      try {
+        const picked = await navigator.contacts.select(['name', 'tel'], {multiple: false});
+        if (!picked.length) return;
+        const contact = picked[0];
+        if (contact.name && contact.name.length && !nameInput.value) {
+          nameInput.value = contact.name[0];
+        }
+        if (contact.tel && contact.tel.length) {
+          const digits = (t) => t.replace(/[^\d+]/g, '');
+          const e164 = contact.tel.map(digits).find((t) => /^\+[1-9]\d{6,14}$/.test(t));
+          numberInput.value = e164 || digits(contact.tel[0]);
+        } else {
+          alert('That contact has no phone number saved.');
+        }
+      } catch (err) {
+        // The user cancelling the picker also lands here (AbortError) -
+        // not worth an alert for that one.
+        if (err.name !== 'AbortError') alert('Could not read contacts: ' + err.message);
+      } finally {
+        pickBtn.disabled = false;
+      }
+    });
+  }
 </script>
 {% endblock %}

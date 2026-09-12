@@ -9,15 +9,38 @@
 </head>
 <body>
 {% if session.get('authenticated') %}
-<nav class="nav">
+<div class="topbar">
   <a class="brand" href="{{ url_for('index') }}">Little&nbsp;Voicemail</a>
-  <div class="nav-links">
-    <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}class="active"{% endif %}>Status</a>
-    <a href="{{ url_for('contacts') }}" {% if request.endpoint == 'contacts' %}class="active"{% endif %}>Contacts</a>
-    <a href="{{ url_for('sounds') }}" {% if request.endpoint == 'sounds' %}class="active"{% endif %}>Sounds</a>
-    <a href="{{ url_for('quiet_times') }}" {% if request.endpoint == 'quiet_times' %}class="active"{% endif %}>Quiet&nbsp;times</a>
-    <a href="{{ url_for('system') }}" {% if request.endpoint in ('system', 'signal_page', 'button_test') %}class="active"{% endif %}>System{% if not signal_linked %}<span class="dot" title="not linked yet"></span>{% endif %}</a>
-  </div>
+</div>
+<nav class="tabbar">
+  <a class="tab {% if request.endpoint in ('index', 'contacts') %}active{% endif %}" href="{{ url_for('index') }}">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+    </svg>
+    <span>Status</span>
+  </a>
+  <a class="tab {% if request.endpoint == 'sounds' %}active{% endif %}" href="{{ url_for('sounds') }}">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+    </svg>
+    <span>Sounds</span>
+  </a>
+  <a class="tab {% if request.endpoint == 'quiet_times' %}active{% endif %}" href="{{ url_for('quiet_times') }}">
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+    <span>Quiet&nbsp;times</span>
+  </a>
+  <a class="tab {% if request.endpoint in ('system', 'signal_page', 'button_test') %}active{% endif %}" href="{{ url_for('system') }}">
+    {% if not signal_linked %}<span class="tab-dot" title="Signal not linked yet"></span>{% endif %}
+    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+    <span>System</span>
+  </a>
 </nav>
 {% endif %}
 
@@ -45,6 +68,48 @@
 </main>
 
 <footer class="foot">Little Voicemail v{{ app_version }}</footer>
+
+<script>
+  // Every card's own first <h2> is styled as a coloured title bar by CSS
+  // alone (see .card > h2:first-child), so the page still looks right with
+  // JS off. This just layers the fold/unfold behaviour on top: click the
+  // bar to hide everything else in the card, remembered per browser so a
+  // card collapsed once stays that way.
+  (function () {
+    document.querySelectorAll('.card').forEach((card) => {
+      const head = card.firstElementChild;
+      if (!head || head.tagName !== 'H2') return;
+      const key = 'lv_card_' + location.pathname + '_' + (card.id || head.textContent.trim());
+      const chevron = document.createElement('span');
+      chevron.className = 'card-chevron';
+      chevron.setAttribute('aria-hidden', 'true');
+      chevron.textContent = '›';
+      head.appendChild(chevron);
+      head.classList.add('card-head');
+      head.setAttribute('role', 'button');
+      head.setAttribute('tabindex', '0');
+
+      function apply(collapsed) {
+        card.classList.toggle('collapsed', collapsed);
+      }
+      let collapsed = false;
+      try { collapsed = localStorage.getItem(key) === '1'; } catch (err) { /* ignore */ }
+      apply(collapsed);
+
+      function toggle() {
+        collapsed = !collapsed;
+        apply(collapsed);
+        try { localStorage.setItem(key, collapsed ? '1' : '0'); }
+        catch (err) { /* storage full or unavailable - not worth surfacing */ }
+      }
+      head.addEventListener('click', toggle);
+      head.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+      });
+    });
+  })();
+</script>
+
 {% if session.get('authenticated') %}
 <script>
   // Diagnostics: a running, timestamped log of every button press and

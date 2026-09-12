@@ -114,9 +114,9 @@ starts on its own. It takes half a minute to connect.
 
 ## 5. Add contacts
 
-**Contacts** in the web UI. For each button, enter a nickname and the person's
-number in full international form — `+447700900123`, not `07700900123`. The
-person must already use Signal on that number.
+On the **Status** page, tap a button to open its editor, then enter a nickname
+and the person's number in full international form — `+447700900123`, not
+`07700900123`. The person must already use Signal on that number.
 
 "Get nicknames from Signal" fills in names from the linked account's contact
 list, so you do not have to type them twice.

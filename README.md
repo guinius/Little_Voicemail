@@ -84,7 +84,7 @@ with Raspberry Pi Imager. It is Raspberry Pi OS Lite 64-bit with everything
 already installed — the ReSpeaker driver enabled, signal-cli in place, the web
 UI set to start on boot. Power on, open
 **https://littlevoicemail.local:8443**, set a password, link Signal from the
-Signal tab. No SSH at any point.
+System tab. No SSH at any point.
 
 If the box cannot reach your WiFi it raises its own `Little Voicemail setup`
 network so you can enter the details from a browser, rather than becoming
