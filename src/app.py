@@ -47,6 +47,18 @@ log = logging.getLogger(__name__)
 # strand the device for the rest of the day.
 TEST_MODE_MAX_SECONDS = 600
 
+# Factory reset (GitHub issue #19): hold contact buttons 1 and 2 together
+# for this long and the device wipes every setting and reboots into
+# first-run setup. Deliberately two specific buttons rather than any pair -
+# a child leaning on the pad, or a stuck button, should not be able to
+# trigger it by accident the way "any two at once" could.
+FACTORY_RESET_SLOTS = (1, 2)
+FACTORY_RESET_HOLD_SECONDS = 10.0
+# The LED render loop only ticks at 25 Hz (RENDER_INTERVAL in leds.py), so
+# this is as fast a flash as it can actually show, not a literal 50 Hz -
+# still unmistakably different from any of the app's normal lamp patterns.
+FACTORY_RESET_FLASH_SECONDS = 3.0
+
 # How many recordings can be mid-encode/mid-send at once before a new
 # push-to-talk has to wait its turn. Below this, finishing a recording
 # hands it off to the background and the child can go straight back to
@@ -118,6 +130,11 @@ class PhoneApp:
         self._test_mode = False
         self._test_mode_since = 0.0
         self._test_events: dict[int, dict] = {}
+        # Guards the factory-reset combo (see _check_factory_reset_combo) so
+        # it fires exactly once even though the flash-then-wipe sequence
+        # takes several seconds, during which the buttons are typically
+        # still held.
+        self._factory_reset_triggered = False
 
         signal.on_voice_message = self._on_voice_message
         signal.on_read_receipt = self._on_read_receipt
@@ -206,6 +223,11 @@ class PhoneApp:
                 if now - last_status_write >= 3.0:
                     last_status_write = now
                     self._write_status()
+                # Checked unconditionally, ahead of everything else here and
+                # regardless of quiet time or button test mode - it is the
+                # one escape hatch meant to work no matter what state the
+                # box has gotten itself into.
+                self._check_factory_reset_combo(now)
                 self._poll_test_mode(now)
                 if (
                     self.state is State.SELECTED
@@ -231,6 +253,42 @@ class PhoneApp:
                 raise
             except Exception:
                 log.exception("tick loop error")
+
+    # -- factory reset -----------------------------------------------------
+
+    def _check_factory_reset_combo(self, now: float) -> None:
+        """Buttons 1 and 2 held together for FACTORY_RESET_HOLD_SECONDS."""
+        if self._factory_reset_triggered:
+            return
+        starts = [self.hw.buttons.held_since(slot) for slot in FACTORY_RESET_SLOTS]
+        if any(start is None for start in starts):
+            return
+        # Timed from whichever of the two was pressed *last* - both have to
+        # be held together for the full duration, not just overlap briefly.
+        if now - max(starts) < FACTORY_RESET_HOLD_SECONDS:
+            return
+        self._factory_reset_triggered = True
+        log.warning(
+            "factory reset triggered: buttons %s held for %.0fs",
+            FACTORY_RESET_SLOTS, FACTORY_RESET_HOLD_SECONDS,
+        )
+        self._tasks.append(
+            asyncio.create_task(self._run_factory_reset(), name="factory-reset")
+        )
+
+    async def _run_factory_reset(self) -> None:
+        from . import factory_reset
+
+        try:
+            cycle = 0.2  # on+off per blink; see FACTORY_RESET_FLASH_SECONDS
+            times = max(1, round(FACTORY_RESET_FLASH_SECONDS / cycle))
+            await self.hw.leds.flash_all(times=times, on=cycle / 2, off=cycle / 2)
+        except Exception:
+            log.exception("factory reset flash failed; resetting anyway")
+        factory_reset.wipe()
+        ok, detail = factory_reset.reboot()
+        if not ok:
+            log.error("factory reset: reboot command failed: %s", detail)
 
     # -- button test mode --------------------------------------------------
 

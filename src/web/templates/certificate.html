@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Install the certificate &middot; Little Voicemail{% endblock %}
+
+{% block content %}
+<h1>Install the certificate</h1>
+
+<div class="card">
+  <h2>About this certificate</h2>
+  <p>
+    This device signs its own HTTPS certificate using its own private
+    certificate authority (CA) &mdash; one made just for this box, not
+    shared with any other Little Voicemail device. Your browser doesn't
+    know about it yet, which is why it shows a warning the first time you
+    connect, even though the connection is already encrypted.
+  </p>
+  <p>
+    Installing <strong>this device's own certificate</strong> once on each
+    phone, tablet or computer that opens this page removes that warning for
+    good on every future visit &mdash; the padlock shows fully trusted,
+    exactly like any other secure website.
+  </p>
+  <div class="actions">
+    <a class="btn big" href="{{ url_for('download_ca_certificate') }}">Download the certificate</a>
+  </div>
+  <p class="hint">
+    This file only lets your browser recognise <em>this device's</em>
+    identity. It cannot be used to access anything, and installing it does
+    not give this box - or anyone else - any new access to your phone or
+    computer.
+  </p>
+</div>
+
+<div class="card">
+  <h2>iPhone or iPad</h2>
+  <ol>
+    <li>Tap "Download the certificate" above. Safari will say a profile was downloaded.</li>
+    <li>Go to <strong>Settings &rarr; General &rarr; VPN &amp; Device Management</strong>, tap
+      the downloaded profile, then <strong>Install</strong> (twice, entering your passcode
+      if asked).</li>
+    <li>One extra step iOS doesn't do on its own: go to <strong>Settings &rarr; General &rarr;
+      About &rarr; Certificate Trust Settings</strong> and turn on full trust for
+      "Little Voicemail Local CA". Skipping this step leaves the warning in place.</li>
+  </ol>
+</div>
+
+<div class="card">
+  <h2>Android</h2>
+  <ol>
+    <li>Tap "Download the certificate" above.</li>
+    <li>Go to <strong>Settings &rarr; Security</strong> (on some phones,
+      <strong>Settings &rarr; Security &rarr; Encryption &amp; credentials</strong>) and
+      choose <strong>Install a certificate &rarr; CA certificate</strong>.</li>
+    <li>Pick the downloaded file and confirm. Some versions of Android show a permanent
+      notification that "a certificate authority is installed" whenever a manually-added
+      one is present &mdash; that's expected, not a sign of a problem.</li>
+  </ol>
+</div>
+
+<div class="card">
+  <h2>Windows</h2>
+  <ol>
+    <li>Download the certificate, then double-click the downloaded file.</li>
+    <li>Choose <strong>Install Certificate</strong>, then <strong>Local Machine</strong> (or
+      Current User), then <strong>Place all certificates in the following store</strong> and
+      pick <strong>Trusted Root Certification Authorities</strong>.</li>
+    <li>Finish, and accept the security prompt.</li>
+  </ol>
+</div>
+
+<div class="card">
+  <h2>Mac</h2>
+  <ol>
+    <li>Download the certificate. It opens automatically in <strong>Keychain Access</strong>,
+      in the "login" keychain.</li>
+    <li>Find "Little Voicemail Local CA" in the list, double-click it, expand
+      <strong>Trust</strong>, and set "When using this certificate" to
+      <strong>Always Trust</strong>.</li>
+    <li>Close the window and enter your password to confirm.</li>
+  </ol>
+  <p class="hint">Safari and Chrome both use this system trust store, so one install covers both.</p>
+</div>
+
+<div class="card">
+  <h2>Prefer not to bother?</h2>
+  <p class="hint">
+    None of this is required. The connection to this device is already
+    encrypted without it &mdash; installing the certificate only silences
+    the one-time browser warning, since it isn't from an authority your
+    browser already trusts. Accepting that warning once per device works
+    just as well if you'd rather skip these steps.
+  </p>
+</div>
+{% endblock %}

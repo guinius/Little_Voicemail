@@ -137,6 +137,30 @@ def test_two_buttons_are_tracked_independently(reader):
     assert reader.is_held(PTT)
 
 
+def test_held_since_reports_the_press_time(reader):
+    assert reader.held_since(1) is None
+
+    reader._tick(pressed(1), 10.0)
+    confirmed_at = 10.0 + DEBOUNCE_SECONDS + 0.01
+    reader._tick(pressed(1), confirmed_at)
+
+    # The debounced edge fires once the raw signal has held stable for
+    # DEBOUNCE_SECONDS, so the recorded time is when that settled, not the
+    # first raw sample.
+    assert reader.held_since(1) == confirmed_at
+    assert reader.held_since(2) is None
+
+
+def test_held_since_clears_on_release(reader):
+    reader._tick(pressed(1), 10.0)
+    reader._tick(pressed(1), 10.0 + DEBOUNCE_SECONDS + 0.01)
+
+    reader._tick(pressed(), 11.0)
+    reader._tick(pressed(), 11.0 + DEBOUNCE_SECONDS + 0.01)
+
+    assert reader.held_since(1) is None
+
+
 def test_releasing_one_button_leaves_the_other_held(reader):
     reader._tick(pressed(2, PTT), 0.0)
     reader._tick(pressed(2, PTT), DEBOUNCE_SECONDS + 0.01)

@@ -6,13 +6,14 @@
 # WiFi, raise an access point and join a network - all of which need root.
 # Granting `sudo nmcli` would be a very wide grant: nmcli can do a great deal
 # more than this. Instead sudoers allows exactly this script, and this script
-# allows exactly these five verbs.
+# allows exactly these verbs.
 #
 #   lv-netctl status
 #   lv-netctl scan
 #   lv-netctl hotspot-up   <ssid> <password>
 #   lv-netctl hotspot-down
 #   lv-netctl join         <ssid> [password] [--hidden]
+#   lv-netctl forget
 #
 set -euo pipefail
 
@@ -103,11 +104,21 @@ cmd_join() {
     fi
 }
 
+cmd_forget() {
+    # Factory reset (GitHub issue #19): delete the saved home-WiFi profile
+    # so the box has nothing to join on its next boot and falls back to
+    # raising its own setup hotspot, same as day one. The hotspot's own
+    # profile is transient (raised fresh by raise_hotspot() whenever
+    # needed) so there is nothing there worth deleting.
+    nmcli connection delete "$WIFI_CON" >/dev/null 2>&1 || true
+}
+
 case "${1:-}" in
     status)        cmd_status ;;
     scan)          cmd_scan ;;
     hotspot-up)    cmd_hotspot_up "${2:-}" "${3:-}" ;;
     hotspot-down)  cmd_hotspot_down ;;
     join)          cmd_join "${2:-}" "${3:-}" "${4:-}" ;;
-    *)             die "usage: lv-netctl status|scan|hotspot-up|hotspot-down|join" ;;
+    forget)        cmd_forget ;;
+    *)             die "usage: lv-netctl status|scan|hotspot-up|hotspot-down|join|forget" ;;
 esac

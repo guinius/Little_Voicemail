@@ -18,7 +18,7 @@
       {% endif %}
     </dd>
     <dt>Signal account</dt>
-    <dd>{{ account or "not linked" }} &mdash; <a href="{{ url_for('signal_page') }}">manage</a></dd>
+    <dd>{{ account or "not linked" }} &mdash; <a href="#signal-section">manage</a></dd>
   </dl>
 
   {% if update.error %}
@@ -60,78 +60,300 @@
   {% endif %}
 </div>
 
-<div class="card">
-  <h2>Audio &amp; tools</h2>
-  <p class="hint">
-    Read-only checks - nothing here opens a device or changes anything, so it's
-    safe to reload this page any time you're chasing a recording or sending
-    problem.
+<div class="card" id="signal-section">
+  <h2>Signal</h2>
+
+  <div id="account-card">
+    {% if account %}
+      <div class="banner success">This device is linked to <strong>{{ account }}</strong>.</div>
+      <dl class="kv">
+        <dt>signal-cli</dt>
+        <dd id="svc-signal-cli">
+          {% if services['signal-cli.service'].active %}
+            <span class="badge ok">running</span>
+          {% else %}
+            <span class="badge err">{{ services['signal-cli.service'].state }}</span>
+          {% endif %}
+        </dd>
+        <dt>Phone service</dt>
+        <dd id="svc-phone">
+          {% if services['little-voicemail.service'].active %}
+            <span class="badge ok">running</span>
+          {% else %}
+            <span class="badge err">{{ services['little-voicemail.service'].state }}</span>
+          {% endif %}
+        </dd>
+        <dt>Connected to Signal</dt>
+        <dd id="svc-connected">
+          {% if status.stale %}
+            <span class="badge err">phone service not running</span>
+          {% elif status.get('signal_connected') %}
+            <span class="badge ok">connected</span>
+          {% else %}
+            <span class="badge err">not connected</span>
+          {% endif %}
+        </dd>
+      </dl>
+      <p class="hint">
+        "Running" only means the process is up; "Connected to Signal" is the phone
+        service's actual link to signal-cli, which is what the Status page shows too.
+        They can disagree briefly while a service restarts.
+      </p>
+      <p class="hint">
+        Unlinking stops the phone service and forgets the account on this box. It does
+        <em>not</em> remove the device from your phone &mdash; do that in Signal under
+        Settings &rarr; Linked devices. Messages already received stay on the box.
+      </p>
+      <div class="actions">
+        <button type="button" id="unlink" class="danger">Unlink this device</button>
+        <button type="button" id="relink" class="btn ghost">Link a different account</button>
+      </div>
+    {% else %}
+      <h3>Link a Signal account</h3>
+      <p>
+        Little Voicemail joins an existing Signal account as a companion device, the
+        same way Signal Desktop does. Everything sent to that account arrives here.
+      </p>
+      <div class="banner quiet">
+        <strong>Use a number the child is not otherwise using.</strong> A cheap PAYG SIM,
+        or a free number from a service that can receive SMS, keeps the child's box
+        separate from your own Signal account. Register the number in the Signal app on
+        a phone first.
+      </div>
+      {% if not signal_cli %}
+        <div class="banner error">
+          signal-cli is not installed on this device, so linking cannot start.
+          Re-run the installer, or flash the prebuilt image.
+        </div>
+      {% endif %}
+      <div class="actions">
+        <button type="button" id="start-link" {% if not signal_cli %}disabled{% endif %}>
+          Start linking
+        </button>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="card" id="link-card" hidden>
+    <h3>Finish on your phone</h3>
+
+    <p class="countdown" id="countdown"></p>
+
+    <div id="link-steps">
+      <div class="link-step" id="step-tap">
+        <a class="btn big" id="open-signal" href="#" rel="noreferrer">Open Signal and link this device</a>
+        <p class="hint plat plat-android" hidden>
+          Tap the button. Signal opens and asks whether to link this device &mdash; say yes.
+          You can do this on the same phone you are reading this page on.
+        </p>
+        <p class="hint plat plat-ios" hidden>
+          Tap the button and Signal will tell you that linking has to start from
+          <strong>Settings &rarr; Linked devices</strong>. Go there, choose
+          <strong>Link New Device</strong>, and scan the QR code below
+          <strong>from a second screen</strong> &mdash; a laptop, tablet or another phone
+          showing this page. Signal on iPhone requires a camera scan and cannot link to
+          itself.
+        </p>
+        <p class="hint plat plat-other" hidden>
+          This button only works on a phone with Signal installed. On a computer, show the
+          QR code below and scan it with Signal on the phone that owns the number.
+        </p>
+      </div>
+
+      <div class="link-step" id="step-copy">
+        <label for="link-uri">Or copy the link and paste it into Signal on another device:</label>
+        <div class="uri-row">
+          <input type="text" id="link-uri" class="uri-box" readonly>
+          <button type="button" id="copy-uri" class="btn ghost">Copy</button>
+        </div>
+      </div>
+
+      <details class="link-step" id="step-qr">
+        <summary>Show the QR code</summary>
+        <p class="hint">
+          In Signal on the phone: <strong>Settings &rarr; Linked devices &rarr; Link new
+          device</strong>, then scan this.
+        </p>
+        <img class="qr" id="qr" alt="QR code containing the Signal link" src="">
+      </details>
+    </div>
+
+    <div class="actions">
+      <button type="button" id="cancel-link" class="btn ghost">Cancel</button>
+    </div>
+
+    <pre class="log" id="link-log" hidden></pre>
+  </div>
+
+  <p class="hint" style="margin-top:1rem">
+    Once linking succeeds, tap a button on the
+    <a href="{{ url_for('index') }}">Status</a> page to give it a contact. If linking keeps
+    failing, the usual cause is the clock: a box that has been unplugged for a long time can
+    be far enough out that Signal rejects it. It fixes itself a minute or so after the
+    network comes up.
   </p>
-  <dl class="kv">
-    <dt>arecord / ffmpeg / ffplay</dt>
-    <dd>
-      {% for name, present in audio_diag.tools.items() %}
-        <span class="badge {{ 'ok' if present else 'err' }}">{{ name }}{{ '' if present else ' missing' }}</span>
-      {% endfor %}
-    </dd>
-    <dt>Configured input device</dt>
-    <dd><code>{{ audio_diag.input_device }}</code></dd>
-    <dt>Configured output device</dt>
-    <dd><code>{{ audio_diag.output_device }}</code></dd>
-  </dl>
-  <p class="hint">Sound cards ALSA can see (<code>arecord -l</code>):</p>
-  <pre class="log">{{ audio_diag.sound_cards }}</pre>
-  {% if audio_diag.i2c %}
-    <p class="hint">I&sup2;C bus (<code>i2cdetect -y 1</code>) - the ReSpeaker codec should show up here regardless of which hardware branch this is:</p>
-    <pre class="log">{{ audio_diag.i2c }}</pre>
-  {% endif %}
 </div>
 
 <div class="card">
-  <h2>Recent messages</h2>
-  {% if not recent %}
-    <p class="hint">Nothing received yet.</p>
-  {% else %}
-    <table>
-      <tr><th>Button</th><th>From</th><th>Status</th></tr>
-      {% for row in recent %}
-        <tr>
-          <td>{{ row['slot'] }}</td>
-          <td>{{ row['sender'] }}</td>
-          <td>
-            {% if not row['cleared_at'] %}
-              <span class="badge warn">waiting</span>
-            {% elif row['cleared_reason'] == 'played' %}
-              <span class="badge ok">heard here</span>
-            {% elif row['cleared_reason'] == 'read_elsewhere' %}
-              <span class="badge ok">read on another device</span>
-            {% else %}
-              <span class="badge">cleared</span>
-            {% endif %}
+  <h2>Security</h2>
+  <p class="hint">
+    This device signs its own certificate with its own private certificate
+    authority. Installing that certificate once on each phone or computer
+    that uses this page removes the browser's one-time security warning for
+    good.
+  </p>
+  <div class="actions">
+    <a class="btn ghost" href="{{ url_for('certificate_page') }}">How to install the certificate</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Session</h2>
+  <p class="hint">Signed in to the parent settings on this browser.</p>
+  <div class="actions">
+    <a class="btn danger" href="{{ url_for('logout') }}">Log out</a>
+  </div>
+</div>
+
+<div class="card">
+  <label class="toggle" style="padding-bottom:0">
+    <input type="checkbox" id="advanced-toggle">
+    <span>Show advanced &mdash; audio diagnostics, the activity log and button test</span>
+  </label>
+</div>
+
+<div id="advanced-section" hidden>
+  <div class="card">
+    <h2>Audio &amp; tools</h2>
+    <p class="hint">
+      Read-only checks - nothing here opens a device or changes anything, so it's
+      safe to reload this page any time you're chasing a recording or sending
+      problem.
+    </p>
+    <dl class="kv">
+      <dt>arecord / ffmpeg / ffplay</dt>
+      <dd>
+        {% for name, present in audio_diag.tools.items() %}
+          <span class="badge {{ 'ok' if present else 'err' }}">{{ name }}{{ '' if present else ' missing' }}</span>
+        {% endfor %}
+      </dd>
+      <dt>Configured input device</dt>
+      <dd><code>{{ audio_diag.input_device }}</code></dd>
+      <dt>Configured output device</dt>
+      <dd><code>{{ audio_diag.output_device }}</code></dd>
+    </dl>
+    <p class="hint">Sound cards ALSA can see (<code>arecord -l</code>):</p>
+    <pre class="log">{{ audio_diag.sound_cards }}</pre>
+    {% if audio_diag.i2c %}
+      <p class="hint">I&sup2;C bus (<code>i2cdetect -y 1</code>) - the ReSpeaker codec should show up here regardless of which hardware branch this is:</p>
+      <pre class="log">{{ audio_diag.i2c }}</pre>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Diagnostics log</h2>
+    <p class="hint">
+      Every button press and background request across the whole app, kept in this
+      browser only. Go try the thing that isn't working - other pages included -
+      then come back here, copy the log, and paste it back.
+    </p>
+    <pre class="log" id="diag-log"></pre>
+    <div class="actions">
+      <button type="button" class="ghost" id="diag-copy">Copy log</button>
+      <button type="button" class="ghost" id="diag-clear">Clear log</button>
+    </div>
+  </div>
+
+  <div class="card" id="button-test-card">
+    <h2>Button test</h2>
+    <p class="hint">
+      For checking wiring on new buttons: while running, pressing any button
+      or push-to-talk lights <em>only that button's own lamp</em> and shows up
+      below - nothing else happens. No recording, no selecting, no sending.
+      Turns itself off automatically after 10 minutes if you forget, so it
+      can't strand the device.
+    </p>
+
+    {% if not status.get('hardware_live') %}
+      <div class="banner error">
+        Buttons and lights are running simulated (no GPIO detected) - pressing
+        a real button won't show up here until that's sorted out.
+      </div>
+    {% endif %}
+
+    {% if status.stale %}
+      <div class="banner error">
+        The phone service isn't running, so there's nothing to receive button
+        presses at all. Start it before testing.
+      </div>
+    {% endif %}
+
+    <div class="actions">
+      <button type="button" id="bt-toggle">{{ "Stop test mode" if test_active else "Start test mode" }}</button>
+    </div>
+
+    <p class="hint" id="bt-mode-status">
+      {% if test_active %}Test mode is running.{% else %}Test mode is off.{% endif %}
+    </p>
+
+    <table id="button-table">
+      <tr><th>Button</th><th>Last seen</th><th>When</th><th>Held for</th></tr>
+      {% for row in button_rows %}
+        <tr id="bt-row-{{ row.slot }}">
+          <td>{{ row.label }}</td>
+          <td id="bt-action-{{ row.slot }}">
+            {% if row.action %}{{ row.action }}{% else %}<span class="hint">not pressed yet</span>{% endif %}
           </td>
+          <td id="bt-at-{{ row.slot }}">{{ row.at or "" }}</td>
+          <td id="bt-duration-{{ row.slot }}">{{ (row.duration ~ "s") if row.duration else "" }}</td>
         </tr>
       {% endfor %}
     </table>
-  {% endif %}
-</div>
+  </div>
 
-<div class="card">
-  <h2>Diagnostics log</h2>
-  <p class="hint">
-    Every button press and background request across the whole app, kept in this
-    browser only. Go try the thing that isn't working - other pages included -
-    then come back here, copy the log, and paste it back.
-  </p>
-  <pre class="log" id="diag-log"></pre>
-  <div class="actions">
-    <button type="button" class="ghost" id="diag-copy">Copy log</button>
-    <button type="button" class="ghost" id="diag-clear">Clear log</button>
+  <div class="card">
+    <h2>Factory reset</h2>
+    <p class="hint">
+      Wipes contacts, quiet times, the ringtone choice, the parent password,
+      the linked Signal account and the saved WiFi network, then reboots
+      straight into first-run setup &mdash; the same state the box was in
+      the day it was flashed. The same thing happens if buttons 1 and 2 are
+      held together on the device itself for 10 seconds. <strong>There is
+      no undo.</strong>
+    </p>
+    <div class="actions" style="align-items:center">
+      <input type="text" id="reset-confirm" placeholder='Type RESET to confirm' style="max-width:220px">
+      <button type="button" class="danger" id="factory-reset">Factory reset</button>
+    </div>
+    <p class="hint" id="reset-status" hidden></p>
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+  // -- advanced toggle ---------------------------------------------------
+  (function () {
+    const toggle = document.getElementById('advanced-toggle');
+    const section = document.getElementById('advanced-section');
+    const KEY = 'lv_system_advanced';
+    const params = new URLSearchParams(location.search);
+
+    let wanted = params.get('advanced') === '1';
+    if (!wanted) {
+      try { wanted = localStorage.getItem(KEY) === '1'; } catch (err) { /* ignore */ }
+    }
+    toggle.checked = wanted;
+    section.hidden = !wanted;
+
+    toggle.addEventListener('change', () => {
+      section.hidden = !toggle.checked;
+      try { localStorage.setItem(KEY, toggle.checked ? '1' : '0'); }
+      catch (err) { /* storage full or unavailable - not worth surfacing */ }
+    });
+  })();
+
+  // -- diagnostics log -----------------------------------------------------
   const diagBox = document.getElementById('diag-log');
   function renderDiag() {
     const lines = window.LVDiag ? window.LVDiag.all() : [];
@@ -150,6 +372,7 @@
     renderDiag();
   });
 
+  // -- software update -----------------------------------------------------
   const btn = document.getElementById('update-now');
   const logBox = document.getElementById('update-log');
 
@@ -187,6 +410,263 @@
       return;
     }
     pollProgress();
+  });
+
+  // -- Signal linking --------------------------------------------------
+  const startBtn  = document.getElementById('start-link');
+  const relinkBtn = document.getElementById('relink');
+  const unlinkBtn = document.getElementById('unlink');
+  const cancelBtn = document.getElementById('cancel-link');
+  const copyBtn   = document.getElementById('copy-uri');
+  const linkCard  = document.getElementById('link-card');
+  const uriBox    = document.getElementById('link-uri');
+  const openLink  = document.getElementById('open-signal');
+  const qrImg     = document.getElementById('qr');
+  const qrStep    = document.getElementById('step-qr');
+  const tapStep   = document.getElementById('step-tap');
+  const steps     = document.getElementById('link-steps');
+  const countdown = document.getElementById('countdown');
+  const linkLogBox = document.getElementById('link-log');
+
+  // Signal behaves differently on the two platforms, so lead with whichever
+  // path actually works there. Every variant is rendered server-side, so a
+  // browser we do not recognise still sees all of it.
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isAndroid = /Android/.test(ua);
+  const platform = isIOS ? 'ios' : (isAndroid ? 'android' : 'other');
+  document.querySelectorAll('.plat-' + platform).forEach(el => { el.hidden = false; });
+  if ((isIOS || platform === 'other') && steps && qrStep && tapStep) {
+    // The QR is the only path that completes here, so put it first and open it.
+    steps.insertBefore(qrStep, tapStep);
+    qrStep.open = true;
+  }
+
+  let polling = false;
+
+  function renderLink(link) {
+    const active = link.phase === 'starting' || link.phase === 'waiting';
+    linkCard.hidden = !active && link.phase !== 'linked';
+
+    if (link.uri) {
+      uriBox.value = link.uri;
+      // Set the href as a property, never through innerHTML.
+      openLink.href = link.uri;
+      if (qrImg.getAttribute('src') !== '{{ url_for("api_signal_link_qr") }}') {
+        qrImg.src = '{{ url_for("api_signal_link_qr") }}?t=' + Date.now();
+      }
+    }
+
+    if (link.message) {
+      linkLogBox.hidden = false;
+      linkLogBox.textContent = [link.message, ...(link.log || [])].filter(Boolean).join('\n');
+    }
+
+    if (active && link.seconds_left) {
+      const m = Math.floor(link.seconds_left / 60);
+      const s = String(link.seconds_left % 60).padStart(2, '0');
+      countdown.textContent = `This link expires in ${m}:${s}.`;
+    } else if (link.phase === 'timeout') {
+      countdown.textContent = 'The link expired. Start again for a fresh one.';
+    } else {
+      countdown.textContent = '';
+    }
+
+    if (link.phase === 'linked') {
+      countdown.textContent = '';
+      steps.hidden = true;
+      cancelBtn.hidden = true;
+      setTimeout(() => window.location.reload(), 4000);
+    }
+    return active;
+  }
+
+  async function pollLink() {
+    const res = await fetch('{{ url_for("api_signal_link_status") }}');
+    if (!res.ok) { polling = false; return; }
+    const data = await res.json();
+    const active = renderLink(data.link);
+    if (active) {
+      setTimeout(pollLink, 2000);
+    } else {
+      polling = false;
+      if (startBtn) { startBtn.disabled = false; startBtn.textContent = 'Start linking'; }
+    }
+  }
+
+  function beginPolling() {
+    if (polling) return;
+    polling = true;
+    pollLink();
+  }
+
+  async function startLink(force) {
+    if (startBtn) { startBtn.disabled = true; startBtn.textContent = 'Starting...'; }
+    steps.hidden = false;
+    cancelBtn.hidden = false;
+    const res = await fetch('{{ url_for("api_signal_link_start") }}', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force: !!force}),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      alert('Could not start linking: ' + (body.error || res.statusText));
+      if (startBtn) { startBtn.disabled = false; startBtn.textContent = 'Start linking'; }
+      return;
+    }
+    linkCard.hidden = false;
+    beginPolling();
+  }
+
+  if (startBtn) startBtn.addEventListener('click', () => startLink(false));
+
+  if (relinkBtn) relinkBtn.addEventListener('click', () => {
+    if (!confirm('Link a different Signal account? The current one stops working here.')) return;
+    startLink(true);
+  });
+
+  if (unlinkBtn) unlinkBtn.addEventListener('click', async () => {
+    if (!confirm('Unlink this device? Messages stop arriving until you link again.')) return;
+    unlinkBtn.disabled = true;
+    const res = await fetch('{{ url_for("api_signal_unlink") }}', {method: 'POST'});
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      alert('Could not unlink: ' + (body.error || res.statusText));
+      unlinkBtn.disabled = false;
+      return;
+    }
+    window.location.reload();
+  });
+
+  if (cancelBtn) cancelBtn.addEventListener('click', async () => {
+    await fetch('{{ url_for("api_signal_link_cancel") }}', {method: 'POST'});
+    linkCard.hidden = true;
+    polling = false;
+    if (startBtn) { startBtn.disabled = false; startBtn.textContent = 'Start linking'; }
+  });
+
+  if (copyBtn) copyBtn.addEventListener('click', async () => {
+    try {
+      // Needs a secure context; fine over HTTPS once the certificate is accepted.
+      await navigator.clipboard.writeText(uriBox.value);
+    } catch (err) {
+      uriBox.select();
+      document.execCommand('copy');
+    }
+    copyBtn.textContent = 'Copied';
+    setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+  });
+
+  // A link started in another tab, or before a reload, is still running.
+  {% if link.phase in ('starting', 'waiting') %}
+    linkCard.hidden = false;
+    renderLink({{ link | tojson }});
+    beginPolling();
+  {% endif %}
+
+  // -- button test -----------------------------------------------------
+  let btActive = {{ "true" if test_active else "false" }};
+  const btToggleBtn = document.getElementById('bt-toggle');
+  const btModeStatus = document.getElementById('bt-mode-status');
+  let btPollTimer = null;
+
+  function setBtActive(nowActive) {
+    btActive = nowActive;
+    btToggleBtn.textContent = btActive ? 'Stop test mode' : 'Start test mode';
+    btModeStatus.textContent = btActive ? 'Test mode is running.' : 'Test mode is off.';
+    if (btActive) {
+      pollButtonTest();
+    } else if (btPollTimer) {
+      clearTimeout(btPollTimer);
+      btPollTimer = null;
+    }
+  }
+
+  async function pollButtonTest() {
+    if (!btActive) return;
+    try {
+      const res = await fetch('{{ url_for("api_status") }}');
+      if (res.ok) {
+        const body = await res.json();
+        const device = body.device || {};
+        if (device.test_mode === false) {
+          // Turned off elsewhere, or the 10-minute safety timeout fired.
+          setBtActive(false);
+          return;
+        }
+        for (const row of device.test_events || []) {
+          const actionCell = document.getElementById('bt-action-' + row.slot);
+          const atCell = document.getElementById('bt-at-' + row.slot);
+          const durationCell = document.getElementById('bt-duration-' + row.slot);
+          if (!actionCell) continue;
+          if (row.action) {
+            actionCell.textContent = row.action;
+            atCell.textContent = row.at || '';
+            durationCell.textContent = row.duration ? row.duration + 's' : '';
+          }
+        }
+      }
+    } catch (err) {
+      // A dropped poll is not worth surfacing - just try again next tick.
+    }
+    btPollTimer = setTimeout(pollButtonTest, 400);
+  }
+
+  btToggleBtn.addEventListener('click', async () => {
+    btToggleBtn.disabled = true;
+    const endpoint = btActive
+      ? '{{ url_for("button_test_stop") }}'
+      : '{{ url_for("button_test_start") }}';
+    try {
+      const res = await fetch(endpoint, {method: 'POST'});
+      if (res.ok) {
+        const body = await res.json();
+        setBtActive(body.active);
+      }
+    } finally {
+      btToggleBtn.disabled = false;
+    }
+  });
+
+  if (btActive) pollButtonTest();
+
+  // -- factory reset -----------------------------------------------------
+  const resetBtn = document.getElementById('factory-reset');
+  const resetConfirm = document.getElementById('reset-confirm');
+  const resetStatus = document.getElementById('reset-status');
+
+  resetBtn.addEventListener('click', async () => {
+    resetStatus.hidden = false;
+    if (resetConfirm.value.trim().toUpperCase() !== 'RESET') {
+      resetStatus.textContent = 'Type RESET in the box first.';
+      return;
+    }
+    if (!confirm('Factory reset this device? Every setting, the linked Signal account and the saved WiFi network will be gone, and it reboots into first-run setup. This cannot be undone.')) {
+      return;
+    }
+    resetBtn.disabled = true;
+    resetStatus.textContent = 'Resetting...';
+    try {
+      const res = await fetch('{{ url_for("api_factory_reset") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({confirm: 'RESET'}),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        resetStatus.textContent = body.error || 'Could not start the reset.';
+        resetBtn.disabled = false;
+        return;
+      }
+      resetStatus.textContent =
+        'Resetting and rebooting. This page will not respond for a minute ' +
+        'or two — once the lights come back, the device will be at first-run setup.';
+    } catch (err) {
+      resetStatus.textContent = 'Could not start the reset: ' + err;
+      resetBtn.disabled = false;
+    }
   });
 </script>
 {% endblock %}

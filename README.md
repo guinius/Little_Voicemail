@@ -48,7 +48,7 @@ below is built on [signal-cli](https://github.com/AsamK/signal-cli).
 | 5 | The recording is sent as a real Signal voice note |
 | 6 | Incoming messages flash that contact's button; you must listen before replying |
 | 7 | A ringtone of your choosing plays on arrival |
-| 8 | Parent web UI over HTTPS on the local network, password protected |
+| 8 | Parent web UI over HTTPS on the local network, password protected, with an optional one-time step to install its certificate and remove the browser warning for good |
 | 9 | Contacts set by phone number + nickname, or pulled from Signal |
 | 10 | Ringtone selectable in the web UI |
 | 11 | Three quiet-time windows (school, nap, bedtime), each independently toggleable |
@@ -56,6 +56,7 @@ below is built on [signal-cli](https://github.com/AsamK/signal-cli).
 | 13 | Multiple messages play back to back with a 1s gap |
 | 14 | Reading a message on a parent's phone clears the light here automatically |
 | 15 | The web UI checks GitHub for updates and can update and reboot in one click |
+| 16 | Factory reset from the web UI or by holding contact buttons 1 and 2 together for 10 seconds |
 
 ## Hardware
 
@@ -83,7 +84,7 @@ with Raspberry Pi Imager. It is Raspberry Pi OS Lite 64-bit with everything
 already installed — the ReSpeaker driver enabled, signal-cli in place, the web
 UI set to start on boot. Power on, open
 **https://littlevoicemail.local:8443**, set a password, link Signal from the
-Signal tab. No SSH at any point.
+System tab. No SSH at any point.
 
 If the box cannot reach your WiFi it raises its own `Little Voicemail setup`
 network so you can enter the details from a browser, rather than becoming
@@ -112,13 +113,14 @@ src/
   signal_client.py    signal-cli JSON-RPC client
   signal_link.py      linking to a Signal account from the web UI
   updater.py          GitHub version check and one-click self-update
+  factory_reset.py    wipes every setting and reboots into first-run setup
   hardware/
     mcp23017.py       I²C expander driver
     buttons.py        debounce and hold detection
     leds.py           lamp patterns and the render loop
   web/
     app.py            Flask parent UI
-    server.py         HTTPS with a self-signed certificate
+    server.py         HTTPS with a certificate signed by this device's own CA
     portal.py         WiFi onboarding hotspot, and the http→https redirect
 
 tools/
