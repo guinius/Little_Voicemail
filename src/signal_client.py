@@ -41,8 +41,17 @@ class SignalError(RuntimeError):
     """A JSON-RPC error returned by signal-cli."""
 
     def __init__(self, code: int, message: str, data: Any = None):
-        super().__init__(f"signal-cli error {code}: {message}")
+        # signal-cli puts the actually useful part of a send failure - which
+        # recipient, and why (UNREGISTERED_FAILURE, UNTRUSTED_IDENTITY, ...) -
+        # in `data`, not `message` ("Failed to send message" on its own says
+        # nothing). Fold it into the exception text so it reaches the System
+        # page's last-error banner instead of getting dropped on the floor.
+        text = f"signal-cli error {code}: {message}"
+        if data:
+            text += f" - {data}"
+        super().__init__(text)
         self.code = code
+        self.message = message
         self.data = data
 
 
