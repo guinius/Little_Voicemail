@@ -571,7 +571,8 @@ class PhoneApp:
         except Exception as exc:
             log.exception("failed to send voice note to slot %s", slot)
             self._record_error(
-                f"send to slot {slot} failed: {type(exc).__name__}: {exc}"
+                f"send to slot {slot} ({contact['number']}) failed: "
+                f"{type(exc).__name__}: {exc}"
             )
             await self._indicate_failure(slot)
         finally:
