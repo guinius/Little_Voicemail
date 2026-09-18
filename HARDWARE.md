@@ -132,22 +132,31 @@ It would be a fine **I/O co-processor** — scanning buttons and driving lamps
 over serial while a Pi does the real work — but that is strictly more parts and
 more complexity than two £3 MCP23017s, for no benefit.
 
-### Making 512 MB work (Zero 2 W / Pi 3A+)
+### Making low RAM work (Zero 2 W / Pi 3A+ / Pi 3B)
 
-The JVM is the memory hog. Three changes make it comfortable:
+The JVM is the memory hog, and on anything under ~2 GB it can starve
+everything else waking up at boot at the same time (network, I2C, the phone
+service itself) - the usual symptom is the boot chime cutting off partway
+through, or the box just taking an extra minute to come up. `install.sh`
+handles this automatically now, for every board, not only the ones this
+tight - there's no reason not to on a box that never drives a display:
 
 ```bash
-# Give the GPU the bare minimum
-echo 'gpu_mem=16' | sudo tee -a /boot/firmware/config.txt
+# Give the GPU the bare minimum - this box never drives a display
+gpu_mem=16                                       # /boot/firmware/config.txt
 
-# Cap signal-cli's heap - add to /etc/little-voicemail/signal.env
-echo 'JAVA_OPTS=-Xmx192m -XX:+UseSerialGC' | sudo tee -a /etc/little-voicemail/signal.env
+# Cap signal-cli's heap - a client handling one voice note at a time
+# does not need the JVM's default (a quarter of total system RAM)
+JAVA_OPTS=-Xmx192m -XX:+UseSerialGC              # /etc/little-voicemail/signal.env
 
-# Compressed RAM swap, much kinder to the SD card than a swapfile
-sudo apt install -y zram-tools
-echo 'ALGO=zstd\nPERCENT=60' | sudo tee -a /etc/default/zramswap
-sudo systemctl restart zramswap
+# Compressed RAM swap, much kinder to the SD card than a swapfile - a
+# safety net for whatever a 192 MB heap cap doesn't cover
+sudo systemctl enable --now zramswap.service     # zram-tools, installed by install.sh
 ```
+
+Re-run `install.sh` to pick these up on a box installed before they became
+the default - it only adds what is missing, so a linked Signal account and
+existing settings are left alone.
 
 Use a Pi Zero 2 W rather than a Pi 4 only if the cost matters to you; expect
 sends to take a second or two longer while Opus encoding runs on the slower
