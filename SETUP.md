@@ -118,6 +118,15 @@ On the **Status** page, tap a button to open its editor, then enter a nickname
 and the person's number in full international form — `+447700900123`, not
 `07700900123`. The person must already use Signal on that number.
 
+> **Each contact needs "Who can find me by number" set to Everyone**, at
+> least until they have exchanged a first message with the box. That
+> setting lives on *their* phone, in Signal → **Settings → Privacy →
+> Phone Number**. Little Voicemail looks a new contact up by phone number
+> the same way any other linked device would, and if that lookup is
+> restricted to people already in their Signal contacts, it cannot find
+> them at all. Once that first message has gone either way the setting
+> can be turned back if they prefer.
+
 "Get nicknames from Signal" fills in names from the linked account's contact
 list, so you do not have to type them twice.
 
@@ -231,6 +240,11 @@ The version must match the `libsignal-client-<version>.jar` in
 
 **Nothing happens when a message arrives**
 Check a quiet time is not running — the Status page says so at the top.
+
+**A newly added contact can't be found**
+Signal → Settings → Privacy → Phone Number → **Who can find me by
+number** has to be **Everyone** on that person's own phone, at least
+until they have exchanged a first message with the box — see step 5.
 
 **The lights stay on after reading on a phone**
 Read receipts have to be enabled on the account: Signal → Settings → Privacy →

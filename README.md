@@ -100,6 +100,11 @@ sudo reboot
 Either way, [SETUP.md](SETUP.md) is the walkthrough. Building the image
 yourself is [tools/image/README.md](tools/image/README.md).
 
+> **Before adding a contact**, ask them to set Signal → Settings → Privacy →
+> Phone Number → **Who can find me by number** to **Everyone** on their own
+> phone, at least until they've exchanged a first message with the box.
+> Otherwise Little Voicemail cannot look them up by phone number at all.
+
 ## How it is put together
 
 ```

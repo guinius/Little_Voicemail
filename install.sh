@@ -57,7 +57,8 @@ apt-get install -y -qq \
     git curl ca-certificates gnupg ffmpeg alsa-utils \
     i2c-tools libasound2-dev device-tree-compiler zip unzip \
     avahi-daemon \
-    network-manager
+    network-manager \
+    zram-tools
 ok "packages installed"
 
 # ------------------------------------------------------------------- java
@@ -206,7 +207,14 @@ if [[ -f "$BOOT_CONFIG" ]]; then
     fi
     grep -q "^dtoverlay=$AUDIO_OVERLAY" "$BOOT_CONFIG" \
         || echo "dtoverlay=$AUDIO_OVERLAY" >> "$BOOT_CONFIG"
-    ok "i2c and $AUDIO_OVERLAY are enabled in $BOOT_CONFIG"
+    # This box never drives a display - no HDMI, no screen, nothing to
+    # render - so the GPU's default RAM split is pure waste here. Handing
+    # it back matters most on the 512 MB-1 GB boards HARDWARE.md flags as
+    # tight for signal-cli's JVM (see "Making low RAM work" below), but it
+    # costs nothing on a bigger board either.
+    grep -q '^gpu_mem=' "$BOOT_CONFIG" \
+        || echo 'gpu_mem=16' >> "$BOOT_CONFIG"
+    ok "i2c, $AUDIO_OVERLAY and gpu_mem=16 are set in $BOOT_CONFIG"
 else
     log "  no $BOOT_CONFIG (not a Raspberry Pi?); skipping"
 fi
@@ -215,6 +223,27 @@ grep -q '^i2c-dev' /etc/modules 2>/dev/null || echo 'i2c-dev' >> /etc/modules
 if ! image_build && command -v raspi-config >/dev/null 2>&1; then
     raspi-config nonint do_i2c 0 || true
 fi
+
+# ------------------------------------------------------------- low memory
+# signal-cli's JVM is the one thing on this box that can genuinely run a
+# 512 MB-1 GB board out of memory at boot, especially right when it is
+# competing with the rest of the system waking up at the same time (network,
+# I2C, the phone service itself) - see HARDWARE.md. Compressed RAM swap is
+# much kinder to the SD card than a swap file and gives the kernel somewhere
+# to put pages under that pressure instead of reaching for the OOM killer.
+# Harmless on a board with RAM to spare, so this is unconditional rather than
+# sized to whichever board happens to be running the installer - a prebuilt
+# image in particular has no way to know that in advance.
+log "Configuring compressed RAM swap (zram)"
+cat > /etc/default/zramswap <<'EOF'
+ALGO=zstd
+PERCENT=60
+EOF
+if ! image_build; then
+    systemctl enable zramswap.service >/dev/null
+    systemctl restart zramswap.service
+fi
+ok "zram swap configured"
 
 if ! image_build; then
     log "Checking the ReSpeaker HAT"
@@ -370,6 +399,16 @@ mkdir -p "$CONFIG_DIR" "$DATA_DIR"/{recordings,certs,signal-cli}
     cp "$INSTALL_DIR/config/config.example.json" "$CONFIG_DIR/config.json"
 [[ -f "$CONFIG_DIR/signal.env" ]] || \
     echo 'SIGNAL_ACCOUNT=' > "$CONFIG_DIR/signal.env"
+# Left uncapped, the JVM sizes its default heap off total system RAM, which
+# is exactly what starves everything else booting alongside it on a
+# 512 MB-1 GB board (see HARDWARE.md's "Making low RAM work"). 192 MB is
+# comfortable for a client that only ever handles one voice note at a time,
+# and the cap costs nothing on a board with RAM to spare. A grep rather than
+# the same-as-signal.env guard above, so re-running the installer adds this
+# to an already-existing signal.env from before this line existed, without
+# touching the SIGNAL_ACCOUNT a parent has since linked.
+grep -q '^JAVA_OPTS=' "$CONFIG_DIR/signal.env" \
+    || echo 'JAVA_OPTS=-Xmx192m -XX:+UseSerialGC' >> "$CONFIG_DIR/signal.env"
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$DATA_DIR" "$INSTALL_DIR"
 chmod 750 "$CONFIG_DIR" "$DATA_DIR"
