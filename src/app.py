@@ -4,7 +4,11 @@ Behaviour, in the order a child experiences it:
 
   * On startup, once buttons/lights/audio are ready, chime.wav plays once
     to say the box is awake - unless quiet time is running, in which case
-    it stays silent like everything else during quiet time.
+    it stays silent like everything else during quiet time. If any button
+    already has an unheard message waiting from before the box came up,
+    that lamp lights up flashing right away, the same as any other
+    incoming message, with the usual ringtone alongside it outside quiet
+    time.
   * Press a contact button. Its lamp lights steady for 30 seconds, then the
     selection lapses back to standby.
   * If that contact has unheard messages, the first press plays them instead
@@ -155,6 +159,7 @@ class PhoneApp:
         self.signal.start()
         self._refresh_leds()
         await self._play_boot_chime()
+        await self._announce_pending_messages()
         self._tasks = [
             asyncio.create_task(self._button_loop(), name="buttons"),
             asyncio.create_task(self._tick_loop(), name="tick"),
@@ -193,6 +198,25 @@ class PhoneApp:
                        self.audio.sounds_dir)
             return
         await self.audio.play(chime)
+
+    async def _announce_pending_messages(self) -> None:
+        """Ring for whatever was already waiting when the box came up.
+
+        _refresh_leds() (called just above, in run()) already lights the
+        lamp for any unheard message the moment the box boots, same as a
+        message arriving live - but a lamp with nobody looking at it is
+        easy to miss. A message that arrives while the app is running gets
+        a ringtone alongside its flashing lamp (_on_voice_message); one
+        that was already sitting in the queue from before boot deserves
+        the same audible cue, not just a silent light. Skipped during
+        quiet time, same as everything else quiet time silences - and
+        skipped when nothing is actually pending, so a boot with an empty
+        queue stays as quiet as before this existed.
+        """
+        if self.quiet.is_quiet():
+            return
+        if self.queue.total_pending():
+            await self.audio.play_ringtone()
 
     async def wait_for_send(self, timeout: float = 10.0) -> None:
         """Let any in-flight sends finish (or give up) before tearing down."""
