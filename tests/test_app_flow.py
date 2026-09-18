@@ -180,6 +180,64 @@ async def test_boot_chime_is_skipped_if_the_file_is_missing(env):
     assert audio.played == []
 
 
+async def _boot_and_inspect(app, seconds: float = 0.1):
+    """Drive the real startup sequence (app.run()) for a moment and report
+    the state it reaches, before tearing it back down - so boot behaviour
+    is exercised through the same path production uses, not just by
+    calling individual methods directly. Inspecting has to happen before
+    shutdown: stopping the app turns every lamp back off as part of clean
+    teardown, which would otherwise erase exactly what this is checking."""
+    task = asyncio.create_task(app.run())
+    try:
+        await asyncio.sleep(seconds)
+        return app.hw.leds._patterns[1].kind
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_boot_flashes_the_lamp_for_a_message_already_pending(env):
+    """A message that arrived while the box was off is already sitting in
+    the queue by the time it boots. Outside quiet time it should light up
+    flashing right away, same as any other unheard message - not stay
+    dark until some other event happens to trigger a refresh."""
+    app, _, audio, _, queue = env
+    queue.add(slot=1, sender=GRANDMA, signal_ts=1000, attachment="/tmp/in.ogg")
+
+    pattern_kind = await _boot_and_inspect(app)
+
+    assert pattern_kind == "blink"
+    assert audio.ringtones == 1
+
+
+@pytest.mark.asyncio
+async def test_boot_does_not_flash_or_ring_with_nothing_pending(env):
+    app, _, audio, _, _ = env
+
+    pattern_kind = await _boot_and_inspect(app)
+
+    assert pattern_kind == "off"
+    assert audio.ringtones == 0
+
+
+@pytest.mark.asyncio
+async def test_boot_with_a_pending_message_stays_silent_during_quiet_time(env):
+    """Requirement 12 applies at boot too: quiet time keeps the box inert,
+    message and all, until it ends."""
+    app, config, audio, _, queue = env
+    enable_quiet_everywhere(config)
+    queue.add(slot=1, sender=GRANDMA, signal_ts=1000, attachment="/tmp/in.ogg")
+
+    pattern_kind = await _boot_and_inspect(app)
+
+    assert pattern_kind == "off"
+    assert audio.ringtones == 0
+
+
 # -- button test mode -------------------------------------------------------
 
 
