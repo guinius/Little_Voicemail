@@ -565,7 +565,7 @@ def test_a_played_message_offers_play_again_on_the_status_page(client, paths):
     login(client)
     response = client.get("/")
     assert response.status_code == 200
-    assert b"Played on the box" in response.data
+    assert b"Played on Little Voicemail" in response.data
     assert b'class="ghost requeue-btn"' in response.data
 
 
@@ -579,6 +579,18 @@ def test_a_still_waiting_message_has_no_play_again_button(client, paths):
     response = client.get("/")
     assert b"Waiting on the box" in response.data
     assert b'class="ghost requeue-btn"' not in response.data
+
+
+def test_the_status_page_shows_only_the_last_six_messages(client, paths):
+    _, data_dir, _ = paths
+    queue = MessageQueue(data_dir / "messages.db")
+    for i in range(9):
+        queue.add(slot=1, sender="+441", signal_ts=i, attachment=f"/tmp/{i}.ogg")
+    queue.close()
+
+    login(client)
+    response = client.get("/")
+    assert response.data.count(b'<tr data-id="') == 6
 
 
 def test_requeue_puts_a_played_message_back_in_the_queue(client, paths):

@@ -778,6 +778,50 @@ async def test_reading_on_a_phone_clears_the_light(env):
     assert queue.pending_counts() == {}
 
 
+@pytest.mark.asyncio
+async def test_a_web_ui_requeue_rings_and_lights_the_lamp(env):
+    """The web UI is a separate process - it can only flip a database row,
+    so the tick loop has to notice a message reappearing on its own (see
+    _poll_requeued_messages) the same way it would notice a live arrival."""
+    app, _, audio, _, queue = env
+    message_id = queue.add(slot=1, sender=GRANDMA, signal_ts=1000, attachment="/tmp/in.ogg")
+    queue.mark_played(message_id)  # as if the child already heard it
+    assert queue.pending_counts() == {}
+
+    queue.requeue(message_id)  # what POST /api/queue/requeue does
+    await app._poll_requeued_messages()
+
+    assert queue.pending_counts() == {1: 1}
+    assert audio.ringtones == 1
+
+
+@pytest.mark.asyncio
+async def test_polling_again_with_nothing_new_does_not_re_ring(env):
+    app, _, audio, _, queue = env
+    message_id = queue.add(slot=1, sender=GRANDMA, signal_ts=1000, attachment="/tmp/in.ogg")
+    queue.mark_played(message_id)
+
+    queue.requeue(message_id)
+    await app._poll_requeued_messages()
+    assert audio.ringtones == 1
+
+    await app._poll_requeued_messages()
+    assert audio.ringtones == 1  # nothing changed since the last poll
+
+
+@pytest.mark.asyncio
+async def test_a_requeue_during_quiet_time_stays_silent(env):
+    app, config, audio, _, queue = env
+    enable_quiet_everywhere(config)
+    message_id = queue.add(slot=1, sender=GRANDMA, signal_ts=1000, attachment="/tmp/in.ogg")
+    queue.mark_played(message_id)
+
+    queue.requeue(message_id)
+    await app._poll_requeued_messages()
+
+    assert audio.ringtones == 0
+
+
 # -- quiet time ----------------------------------------------------------
 
 

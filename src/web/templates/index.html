@@ -131,7 +131,7 @@
       <tr data-id="{{ m.id }}" data-slot="{{ m.slot }}">
         <td>{{ m.who }}</td>
         <td>{{ m.received_at }}</td>
-        <td><span class="badge {% if not m.requeueable %}ok{% endif %}">{{ m.status }}</span></td>
+        <td><span class="msg-status {% if not m.requeueable %}waiting{% endif %}">{{ m.status }}</span></td>
         <td>
           {% if m.requeueable %}
           <button type="button" class="ghost requeue-btn">Play again</button>
