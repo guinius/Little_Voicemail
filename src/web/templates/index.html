@@ -113,6 +113,38 @@
     <dd id="messages-waiting">{{ pending.values() | sum }}</dd>
   </dl>
 </div>
+
+<div class="card">
+  <h2>Recent messages</h2>
+  <p class="hint">
+    A message drops off the box's queue for good once it's played &mdash;
+    on the box, or read on a parent's phone before the child ever heard
+    it. "Play again" puts it back on the button it came in on.
+  </p>
+  {% if recent_messages %}
+  <table>
+    <thead>
+      <tr><th>Button</th><th>Received</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody id="messages-body">
+      {% for m in recent_messages %}
+      <tr data-id="{{ m.id }}" data-slot="{{ m.slot }}">
+        <td>{{ m.who }}</td>
+        <td>{{ m.received_at }}</td>
+        <td><span class="badge {% if not m.requeueable %}ok{% endif %}">{{ m.status }}</span></td>
+        <td>
+          {% if m.requeueable %}
+          <button type="button" class="ghost requeue-btn">Play again</button>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="hint">No messages yet.</p>
+  {% endif %}
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -285,6 +317,54 @@
       }
     } finally {
       clearQueueBtn.disabled = false;
+    }
+  });
+
+  // -- recent messages: "play again" puts a played/read message back ------
+  document.getElementById('messages-body')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.requeue-btn');
+    if (!btn) return;
+    const row = btn.closest('tr');
+    const id = row.dataset.id;
+    const slot = parseInt(row.dataset.slot, 10);
+    btn.disabled = true;
+    try {
+      const res = await fetch('{{ url_for("requeue_message") }}', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: id}),
+        cache: 'no-store',
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(body.error || 'Could not put that message back in the queue.');
+        btn.disabled = false;
+        return;
+      }
+      const badge = row.querySelector('.badge');
+      badge.textContent = 'Waiting on the box';
+      badge.classList.add('ok');
+      btn.remove();
+
+      // Mirror the change onto the Buttons card and the waiting total
+      // rather than reloading, same as the clear-queue handlers above.
+      PENDING[slot] = (PENDING[slot] || 0) + 1;
+      const tile = document.querySelector('.pad .key[data-slot="' + slot + '"]');
+      if (tile) {
+        tile.classList.add('waiting');
+        let count = tile.querySelector('.count');
+        if (!count) {
+          count = document.createElement('span');
+          count.className = 'count';
+          tile.appendChild(count);
+        }
+        count.textContent = PENDING[slot];
+      }
+      const total = document.getElementById('messages-waiting');
+      if (total) total.textContent = String(parseInt(total.textContent || '0', 10) + 1);
+    } catch (err) {
+      alert('Could not put that message back in the queue: ' + err);
+      btn.disabled = false;
     }
   });
 

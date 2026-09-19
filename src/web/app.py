@@ -183,9 +183,10 @@ def create_app(
     @app.route("/")
     @login_required
     def index():
+        contacts = config.contacts()
         return render_template(
             "index.html",
-            contacts=config.contacts(),
+            contacts=contacts,
             pending=queue.pending_counts(),
             status=_device_status(data_dir),
             quiet_active=quiet.active_window(),
@@ -193,6 +194,7 @@ def create_app(
                 "updates", "check_on_load", default=True
             ) else None,
             version=updater.local_version(),
+            recent_messages=_recent_messages(queue, contacts),
         )
 
     @app.route("/contacts")
@@ -449,6 +451,19 @@ def create_app(
         log.info("parent cleared %d queued message(s)", cleared)
         return jsonify({"cleared": cleared, "pending": queue.pending_counts()})
 
+    @app.route("/api/queue/requeue", methods=["POST"])
+    @login_required
+    def requeue_message():
+        raw_id = _json_field(request, "id")
+        try:
+            message_id = int(raw_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid message id"}), 400
+        if not queue.requeue(message_id):
+            return jsonify({"error": "that message isn't waiting to be requeued"}), 404
+        log.info("parent requeued message %d", message_id)
+        return jsonify({"requeued": True, "pending": queue.pending_counts()})
+
     @app.route("/api/status")
     @login_required
     def api_status():
@@ -643,6 +658,40 @@ def _save_quiet_times(config: Config, form) -> list[str]:
     if not errors:
         config.set(updated, "quiet_times")
     return errors
+
+
+STATUS_LABELS = {
+    None: "Waiting on the box",
+    "played": "Played on the box",
+    "read_elsewhere": "Read on a parent's phone",
+    "reset": "Cleared from the web UI",
+}
+
+
+def _recent_messages(queue: MessageQueue, contacts: list[dict]) -> list[dict]:
+    """Recent messages for the Status page's history list.
+
+    Anything with a `cleared_reason` is gone from the box - the child
+    can't press a button and hear it again - so each of those rows also
+    carries `requeueable: True` and the row's id, letting the template
+    offer a "play again" button that calls /api/queue/requeue.
+    """
+    names = {c["slot"]: c["name"] for c in contacts}
+    out = []
+    for row in queue.recent(limit=20):
+        out.append(
+            {
+                "id": row["id"],
+                "slot": row["slot"],
+                "who": names.get(row["slot"]) or f"Button {row['slot']}",
+                "received_at": time.strftime(
+                    "%b %d, %H:%M", time.localtime(row["received_at"])
+                ),
+                "status": STATUS_LABELS.get(row["cleared_reason"], row["cleared_reason"]),
+                "requeueable": row["cleared_at"] is not None,
+            }
+        )
+    return out
 
 
 def _device_status(data_dir: Path) -> dict:

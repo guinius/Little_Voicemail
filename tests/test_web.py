@@ -7,6 +7,7 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 from src.config import Config
+from src.messages import MessageQueue
 from src.signal_link import SignalLinker
 from src.web.app import create_app
 
@@ -549,3 +550,73 @@ def test_status_reports_the_phase(client, linker):
     body = client.get("/api/signal/link/status").get_json()
     assert body["link"]["phase"] == "waiting"
     assert body["link"]["uri"].startswith("sgnl://")
+
+
+# -- recent messages / requeue --------------------------------------------
+
+
+def test_a_played_message_offers_play_again_on_the_status_page(client, paths):
+    _, data_dir, _ = paths
+    queue = MessageQueue(data_dir / "messages.db")
+    message_id = queue.add(slot=1, sender="+441", signal_ts=1, attachment="/tmp/a.ogg")
+    queue.mark_played(message_id)
+    queue.close()
+
+    login(client)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert b"Played on the box" in response.data
+    assert b'class="ghost requeue-btn"' in response.data
+
+
+def test_a_still_waiting_message_has_no_play_again_button(client, paths):
+    _, data_dir, _ = paths
+    queue = MessageQueue(data_dir / "messages.db")
+    queue.add(slot=1, sender="+441", signal_ts=1, attachment="/tmp/a.ogg")
+    queue.close()
+
+    login(client)
+    response = client.get("/")
+    assert b"Waiting on the box" in response.data
+    assert b'class="ghost requeue-btn"' not in response.data
+
+
+def test_requeue_puts_a_played_message_back_in_the_queue(client, paths):
+    _, data_dir, _ = paths
+    queue = MessageQueue(data_dir / "messages.db")
+    message_id = queue.add(slot=3, sender="+441", signal_ts=1, attachment="/tmp/a.ogg")
+    queue.mark_played(message_id)
+    queue.close()
+
+    login(client)
+    response = client.post("/api/queue/requeue", json={"id": message_id})
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["requeued"] is True
+    assert body["pending"] == {"3": 1}
+
+    queue = MessageQueue(data_dir / "messages.db")
+    assert [m.id for m in queue.pending_for_slot(3)] == [message_id]
+    queue.close()
+
+
+def test_requeue_rejects_a_message_that_is_still_waiting(client, paths):
+    _, data_dir, _ = paths
+    queue = MessageQueue(data_dir / "messages.db")
+    message_id = queue.add(slot=1, sender="+441", signal_ts=1, attachment="/tmp/a.ogg")
+    queue.close()
+
+    login(client)
+    response = client.post("/api/queue/requeue", json={"id": message_id})
+    assert response.status_code == 404
+
+
+def test_requeue_rejects_an_unknown_message_id(client):
+    login(client)
+    response = client.post("/api/queue/requeue", json={"id": 999})
+    assert response.status_code == 404
+
+
+def test_requeue_requires_authentication(client):
+    response = client.post("/api/queue/requeue", json={"id": 1})
+    assert response.status_code == 401
