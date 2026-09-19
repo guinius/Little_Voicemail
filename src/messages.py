@@ -119,6 +119,23 @@ class MessageQueue:
             )
             return cur.rowcount or 0
 
+    def requeue(self, message_id: int) -> bool:
+        """Put a previously cleared message back on its slot's queue.
+
+        For when a child plays a message on the box and later wants it
+        again, or a parent reads one on their own phone before the child
+        ever hears it - either way it's gone from the box with no way
+        back short of this. Only touches rows that are actually cleared,
+        so requeuing something already waiting is a harmless no-op.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE messages SET cleared_at = NULL, cleared_reason = NULL"
+                " WHERE id = ? AND cleared_at IS NOT NULL",
+                (message_id,),
+            )
+            return cur.rowcount > 0
+
     def prune(self, keep_days: int = 30) -> int:
         """Drop long-cleared rows so the SD card doesn't fill up."""
         cutoff = time.time() - keep_days * 86400

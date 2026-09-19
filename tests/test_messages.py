@@ -84,6 +84,27 @@ def test_clear_all_empties_every_slot(queue):
     assert queue.pending_counts() == {}
 
 
+def test_requeue_puts_a_played_message_back_on_its_slot(queue):
+    message_id = queue.add(slot=4, sender="+441", signal_ts=1, attachment="/tmp/a.ogg")
+    queue.mark_played(message_id)
+    assert queue.pending_counts() == {}
+
+    assert queue.requeue(message_id) is True
+    assert [m.id for m in queue.pending_for_slot(4)] == [message_id]
+    assert queue.pending_counts() == {4: 1}
+
+
+def test_requeue_a_message_that_is_still_waiting_is_a_no_op(queue):
+    message_id = queue.add(slot=4, sender="+441", signal_ts=1, attachment="/tmp/a.ogg")
+
+    assert queue.requeue(message_id) is False
+    assert queue.pending_counts() == {4: 1}
+
+
+def test_requeue_an_unknown_id_returns_false(queue):
+    assert queue.requeue(12345) is False
+
+
 def test_queue_survives_reopening(tmp_path):
     """A message that arrives at bedtime must still be there in the morning."""
     path = tmp_path / "messages.db"
