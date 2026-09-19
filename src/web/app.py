@@ -662,10 +662,12 @@ def _save_quiet_times(config: Config, form) -> list[str]:
 
 STATUS_LABELS = {
     None: "Waiting on the box",
-    "played": "Played on the box",
+    "played": "Played on Little Voicemail",
     "read_elsewhere": "Read on a parent's phone",
     "reset": "Cleared from the web UI",
 }
+
+RECENT_MESSAGES_SHOWN = 6
 
 
 def _recent_messages(queue: MessageQueue, contacts: list[dict]) -> list[dict]:
@@ -678,7 +680,7 @@ def _recent_messages(queue: MessageQueue, contacts: list[dict]) -> list[dict]:
     """
     names = {c["slot"]: c["name"] for c in contacts}
     out = []
-    for row in queue.recent(limit=20):
+    for row in queue.recent(limit=RECENT_MESSAGES_SHOWN):
         out.append(
             {
                 "id": row["id"],

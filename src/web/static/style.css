@@ -230,6 +230,12 @@ table { width: 100%; border-collapse: collapse; font-size: .86rem; }
 th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 600; }
 
+/* A pill (.badge) suits a single short word ("connected", "ok") - a
+   multi-word status like "Played on Little Voicemail" wraps inside one
+   and looks broken, so the messages list uses plain small text instead. */
+.msg-status { font-size: .74rem; color: var(--muted); line-height: 1.3; }
+.msg-status.waiting { color: var(--ok); font-weight: 700; }
+
 /* ---- signal linking ---- */
 .btn.big {
   display: block; text-align: center; font-size: 1.05rem;

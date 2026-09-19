@@ -139,6 +139,10 @@ class PhoneApp:
         # takes several seconds, during which the buttons are typically
         # still held.
         self._factory_reset_triggered = False
+        # What _refresh_leds() last saw, so the tick loop can tell a message
+        # reappeared without going through _on_voice_message - see
+        # _poll_requeued_messages().
+        self._known_pending: dict[int, int] = {}
 
         signal.on_voice_message = self._on_voice_message
         signal.on_read_receipt = self._on_read_receipt
@@ -273,6 +277,8 @@ class PhoneApp:
                     # display, which owns the lamps until it exits.
                     if not self._test_mode:
                         self._refresh_leds()
+
+                await self._poll_requeued_messages()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -652,12 +658,39 @@ class PhoneApp:
             )
             self._refresh_leds()
 
+    async def _poll_requeued_messages(self) -> None:
+        """Notice a message the web UI put back in the queue.
+
+        The web UI runs as its own process and only reaches this one
+        through the shared message database (see web/app.py's own
+        docstring) - clicking "Play again" there just clears a row's
+        cleared_at, with nothing to tell this app it happened the way a
+        live Signal message tells it via _on_voice_message. Checked every
+        tick (see _tick_loop) so it lights the lamp and rings about as
+        fast as an arriving message would. Silent during quiet time, same
+        as a fresh arrival - revealed when quiet time ends, along with
+        everything else that queued up while it ran.
+        """
+        if self._test_mode or self.quiet.is_quiet():
+            return
+        pending = self.queue.pending_counts()
+        if pending == self._known_pending:
+            return
+        grew = any(
+            pending.get(slot, 0) > self._known_pending.get(slot, 0) for slot in pending
+        )
+        self._refresh_leds()
+        if grew and self.state not in (State.RECORDING, State.PLAYING):
+            await self.audio.play_ringtone()
+
     # -- LEDs ------------------------------------------------------------
 
     def _refresh_leds(self) -> None:
+        pending = self.queue.pending_counts()
+        self._known_pending = pending
         self.hw.leds.apply_contact_states(
             selected=self.selected_slot,
-            pending=self.queue.pending_counts(),
+            pending=pending,
             muted=self.quiet.is_quiet(),
             sending=frozenset(self._send_tasks.values()),
         )
