@@ -569,6 +569,22 @@ def test_a_played_message_offers_play_again_on_the_status_page(client, paths):
     assert b'class="ghost requeue-btn"' in response.data
 
 
+def test_the_requeue_script_targets_the_actual_status_element(client):
+    """Regression: the status span was renamed from .badge to .msg-status
+    (a multi-word phrase looks broken in the pill-shaped .badge), but the
+    "Play again" handler still looked up '.badge' - a bug that only shows
+    up by clicking the button in a real browser, since nothing here runs
+    the page's JS. row.querySelector('.badge') then returns null and the
+    click handler throws before it can update the row or the button tile,
+    even though the server-side requeue already succeeded.
+    """
+    login(client)
+    body = client.get("/").data.decode()
+    handler = body[body.index("messages-body"):]
+    assert "querySelector('.msg-status')" in handler
+    assert "querySelector('.badge')" not in handler
+
+
 def test_a_still_waiting_message_has_no_play_again_button(client, paths):
     _, data_dir, _ = paths
     queue = MessageQueue(data_dir / "messages.db")

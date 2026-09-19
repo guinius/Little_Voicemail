@@ -341,9 +341,9 @@
         btn.disabled = false;
         return;
       }
-      const badge = row.querySelector('.badge');
-      badge.textContent = 'Waiting on the box';
-      badge.classList.add('ok');
+      const status = row.querySelector('.msg-status');
+      status.textContent = 'Waiting on the box';
+      status.classList.add('waiting');
       btn.remove();
 
       // Mirror the change onto the Buttons card and the waiting total
