@@ -143,6 +143,35 @@ def test_system_page_has_the_button_test_content(client):
     assert b"Button test" in response.data
 
 
+def test_system_page_has_the_update_channel_content(client):
+    login(client)
+    response = client.get("/system")
+    assert response.status_code == 200
+    assert b"Update channel" in response.data
+
+
+def test_saving_the_update_channel(client, paths):
+    login(client)
+    config_path, _, _ = paths
+    response = client.post(
+        "/system", data={"update_branch": "dev"}, follow_redirects=True
+    )
+    assert response.status_code == 200
+    assert Config(config_path).get("updates", "branch") == "dev"
+    assert b"dev" in response.data
+
+
+def test_saving_an_unknown_update_channel_is_rejected(client, paths):
+    login(client)
+    config_path, _, _ = paths
+    response = client.post(
+        "/system", data={"update_branch": "not-a-real-branch"}, follow_redirects=True
+    )
+    assert response.status_code == 200
+    assert b"Unknown update channel" in response.data
+    assert Config(config_path).get("updates", "branch") == "master"
+
+
 def test_starting_button_test_creates_the_flag_file(client, paths):
     login(client)
     _, data_dir, _ = paths
@@ -414,6 +443,48 @@ def test_uploading_a_duplicate_name_does_not_overwrite(client, paths):
     assert response.get_json()["name"] == "hello-1.wav"
     assert (sounds_dir / "hello.wav").read_bytes() == b"first"
     assert (sounds_dir / "hello-1.wav").read_bytes() == b"second"
+
+
+def test_delete_requires_login(client):
+    response = client.post("/api/sounds/delete", json={"name": "chime.wav"})
+    assert response.status_code == 401
+
+
+def test_delete_rejects_an_unknown_sound(client):
+    login(client)
+    response = client.post("/api/sounds/delete", json={"name": "../../etc/passwd"})
+    assert response.status_code == 400
+    assert "Unknown sound" in response.get_json()["error"]
+
+
+def test_delete_removes_the_file_and_updates_the_list(client, paths):
+    login(client)
+    _, _, sounds_dir = paths
+    data = {"file": (io.BytesIO(b"RIFF....WAVEfmt "), "lullaby.wav")}
+    client.post("/api/sounds/upload", data=data, content_type="multipart/form-data")
+    assert (sounds_dir / "lullaby.wav").exists()
+
+    response = client.post("/api/sounds/delete", json={"name": "lullaby.wav"})
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["deleted"] == "lullaby.wav"
+    assert "lullaby.wav" not in body["ringtones"]
+    assert not (sounds_dir / "lullaby.wav").exists()
+
+
+def test_deleting_the_selected_ringtone_falls_back_to_another_one(client, paths):
+    login(client)
+    config_path, _, sounds_dir = paths
+    data = {"file": (io.BytesIO(b"RIFF....WAVEfmt "), "lullaby.wav")}
+    client.post("/api/sounds/upload", data=data, content_type="multipart/form-data")
+    client.post("/sounds", data={"ringtone": "lullaby.wav", "volume": "0.5"})
+    assert Config(config_path).get("audio", "ringtone") == "lullaby.wav"
+
+    response = client.post("/api/sounds/delete", json={"name": "lullaby.wav"})
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["current"] == "chime.wav"
+    assert Config(config_path).get("audio", "ringtone") == "chime.wav"
 
 
 def test_preview_requires_login(client):

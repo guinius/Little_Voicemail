@@ -164,4 +164,4 @@ the tests stub both.
 
 ## Licence
 
-MIT
+GNU General Public License v3.0 or later &mdash; see [LICENSE](LICENSE).

@@ -57,6 +57,9 @@ log = logging.getLogger(__name__)
 E164 = re.compile(r"^\+[1-9]\d{6,14}$")
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 ALLOWED_SOUND_EXTENSIONS = {".wav", ".mp3", ".ogg"}
+# "master" is what every device ships pointed at; "dev" is for a box you are
+# actively testing changes on, so it never touches a child's own device.
+UPDATE_CHANNELS = ("master", "dev")
 
 
 def create_app(
@@ -346,6 +349,32 @@ def create_app(
         log.info("parent uploaded custom sound %s", target.name)
         return jsonify({"name": target.name, "ringtones": audio.available_ringtones()})
 
+    @app.route("/api/sounds/delete", methods=["POST"])
+    @login_required
+    def delete_sound():
+        """Remove a sound file the parent no longer wants in the list.
+
+        `name` is checked against available_ringtones() rather than just
+        sanitised, so this can only ever remove a file that's actually in
+        sounds_dir - no path is ever built from unchecked input.
+        """
+        name = _json_field(request, "name") or ""
+        available = audio.available_ringtones()
+        if name not in available:
+            return jsonify({"error": "Unknown sound."}), 400
+        try:
+            (sounds_dir / name).unlink()
+        except OSError as exc:
+            return jsonify({"error": f"Could not delete the file: {exc}"}), 500
+        log.info("parent deleted sound %s", name)
+
+        remaining = audio.available_ringtones()
+        current = config.get("audio", "ringtone", default="")
+        if current == name:
+            current = remaining[0] if remaining else ""
+            config.set(current, "audio", "ringtone")
+        return jsonify({"deleted": name, "ringtones": remaining, "current": current})
+
     @app.route("/quiet-times", methods=["GET", "POST"])
     @login_required
     def quiet_times():
@@ -376,13 +405,26 @@ def create_app(
         # Same story: button test moved under System -> Advanced.
         return redirect(url_for("system", advanced=1, _anchor="advanced-section"))
 
-    @app.route("/system", methods=["GET"])
+    @app.route("/system", methods=["GET", "POST"])
     @login_required
     def system():
+        if request.method == "POST":
+            branch = (request.form.get("update_branch") or "").strip()
+            if branch not in UPDATE_CHANNELS:
+                flash("Unknown update channel.", "error")
+            else:
+                config.set(branch, "updates", "branch")
+                updater.check(force=True)
+                flash(f'Update channel set to "{branch}".', "success")
+            return redirect(
+                url_for("system", advanced=1, _anchor="advanced-section")
+            )
         status = _device_status(data_dir)
         return render_template(
             "system.html",
             update=updater.check(force=request.args.get("recheck") == "1"),
+            update_branch=updater.branch,
+            update_channels=UPDATE_CHANNELS,
             progress=updater.progress,
             version=updater.local_version(),
             account=config.get("signal", "account", default=""),

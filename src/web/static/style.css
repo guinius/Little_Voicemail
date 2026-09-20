@@ -221,6 +221,17 @@ button:disabled { opacity: .5; cursor: not-allowed; filter: none; }
 .badge.err { color: var(--err); border-color: #f1c2c2; background: #fdf1f1; }
 .badge.warn { color: #92650f; border-color: #f3dfae; background: #fdf6e6; }
 .foot { text-align: center; color: #a3a9b8; font-size: .8rem; padding: 1rem 0 2rem; }
+.sound-list { list-style: none; margin: 1rem 0 0; padding: 0; }
+.sound-list li {
+  display: flex; align-items: center; justify-content: space-between; gap: .6rem;
+  padding: .5rem 0; border-bottom: 1px solid var(--line); font-size: .9rem;
+}
+.sound-list li:last-child { border-bottom: none; }
+.sound-delete {
+  background: transparent; border: none; color: var(--muted);
+  font-size: 1.2rem; line-height: 1; cursor: pointer; padding: 0 .3rem;
+}
+.sound-delete:hover { color: var(--err); }
 pre.log {
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
   padding: .7rem; font-size: .78rem; max-height: 220px; overflow: auto;
