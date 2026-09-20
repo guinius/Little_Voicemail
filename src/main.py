@@ -22,6 +22,7 @@ from .paths import (
     signal_attachment_dir,
 )
 from .signal_client import SignalClient
+from .telegram_call_client import TelegramCallClient
 
 log = logging.getLogger("little_voicemail")
 
@@ -79,8 +80,16 @@ async def run(args: argparse.Namespace) -> int:
         attachment_dir=signal_attachment_dir(),
     )
 
+    calls = None
+    if config.get("telegram", "calling", "enabled", default=False):
+        calls = TelegramCallClient(
+            api_id=config.get("telegram", "calling", "api_id", default=""),
+            api_hash=config.get("telegram", "calling", "api_hash", default=""),
+            session_string=config.get("telegram", "calling", "session_string", default=""),
+        )
+
     app = PhoneApp(
-        config, hardware, audio, client, queue,
+        config, hardware, audio, client, queue, calls=calls,
         status_path=data_dir / "status.json",
         test_mode_flag_path=data_dir / "test_mode.flag",
     )

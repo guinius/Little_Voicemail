@@ -1,0 +1,10 @@
+# Optional. Only needed on a device with telegram.calling.enabled set to
+# true (see docs/telegram-migration.md) - live calling is an isolated,
+# opt-in, accepted-risk feature, not something every install needs.
+#
+# Not pinned to exact versions yet: the calling feature is still a stub
+# (see the TODO(telegram-calling) markers in src/telegram_call_client.py) -
+# pin these once its private-call API surface has been verified against a
+# real install.
+pyrogram
+pytgcalls

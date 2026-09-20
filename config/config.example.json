@@ -10,6 +10,16 @@
     "jsonrpc_host": "127.0.0.1",
     "jsonrpc_port": 7583
   },
+  "telegram": {
+    "calling": {
+      "enabled": false,
+      "api_id": "",
+      "api_hash": "",
+      "session_string": "",
+      "ring_timeout_seconds": 30,
+      "dial_timeout_seconds": 45
+    }
+  },
   "network": {
     "setup_ap": {
       "enabled": true,
@@ -19,12 +29,12 @@
     }
   },
   "contacts": [
-    { "slot": 1, "name": "", "number": "", "enabled": false },
-    { "slot": 2, "name": "", "number": "", "enabled": false },
-    { "slot": 3, "name": "", "number": "", "enabled": false },
-    { "slot": 4, "name": "", "number": "", "enabled": false },
-    { "slot": 5, "name": "", "number": "", "enabled": false },
-    { "slot": 6, "name": "", "number": "", "enabled": false }
+    { "slot": 1, "name": "", "number": "", "telegram_id": "", "enabled": false },
+    { "slot": 2, "name": "", "number": "", "telegram_id": "", "enabled": false },
+    { "slot": 3, "name": "", "number": "", "telegram_id": "", "enabled": false },
+    { "slot": 4, "name": "", "number": "", "telegram_id": "", "enabled": false },
+    { "slot": 5, "name": "", "number": "", "telegram_id": "", "enabled": false },
+    { "slot": 6, "name": "", "number": "", "telegram_id": "", "enabled": false }
   ],
   "audio": {
     "ringtone": "chime.wav",

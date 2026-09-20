@@ -32,6 +32,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "jsonrpc_host": "127.0.0.1",
         "jsonrpc_port": 7583,
     },
+    "telegram": {
+        "calling": {
+            # Off by default. This automates a personal Telegram account
+            # over MTProto to place/receive calls (see
+            # docs/telegram-migration.md, "Calling: accepted risk") rather
+            # than going through Telegram's official Bot API the way
+            # messaging does - a parent has to opt in deliberately rather
+            # than getting it on by default.
+            "enabled": False,
+            "api_id": "",
+            "api_hash": "",
+            "session_string": "",
+            "ring_timeout_seconds": 30,
+            "dial_timeout_seconds": 45,
+        },
+    },
     "network": {
         # If the box boots with no network it raises its own access point so
         # the WiFi can be set from a browser. Without this there is no way
@@ -44,9 +60,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     # Six slots, always present, indexed 1-6. An unassigned slot has an
-    # empty number and is inert: its button does nothing.
+    # empty number and is inert: its button does nothing. `telegram_id` is
+    # separate from `number` (a Signal E.164 number) - it is the contact's
+    # numeric Telegram user id, which also doubles as their Bot API private
+    # chat id, and is what a hold-to-call targets (see telegram_call_client.py).
     "contacts": [
-        {"slot": i, "name": "", "number": "", "enabled": False}
+        {"slot": i, "name": "", "number": "", "telegram_id": "", "enabled": False}
         for i in range(1, NUM_CONTACTS + 1)
     ],
     "audio": {
@@ -188,6 +207,7 @@ class Config:
                 "slot": i,
                 "name": str(by_slot.get(i, {}).get("name", "") or ""),
                 "number": str(by_slot.get(i, {}).get("number", "") or ""),
+                "telegram_id": str(by_slot.get(i, {}).get("telegram_id", "") or ""),
                 "enabled": bool(by_slot.get(i, {}).get("enabled", False)),
             }
             for i in range(1, NUM_CONTACTS + 1)
@@ -264,7 +284,9 @@ class Config:
         with self._lock:
             self._reload_if_changed()
             entry = self._data["contacts"][slot - 1]
-            if not entry["enabled"] or not entry["number"]:
+            # A contact needs *a* way to reach it, not necessarily a Signal
+            # number specifically - see the matching note in set_contact().
+            if not entry["enabled"] or not (entry["number"] or entry.get("telegram_id")):
                 return None
             return dict(entry)
 
@@ -280,18 +302,44 @@ class Config:
                     return int(entry["slot"])
         return None
 
+    def slot_for_telegram_id(self, telegram_id: str | int) -> int | None:
+        """Map an inbound Telegram user id (caller or message sender) back
+        to a button slot. Compared as a string - a numeric Telegram id has
+        no formatting variation to normalise away, unlike a phone number."""
+        target = str(telegram_id).strip()
+        if not target:
+            return None
+        with self._lock:
+            self._reload_if_changed()
+            for entry in self._data["contacts"]:
+                if entry["enabled"] and str(entry.get("telegram_id", "")).strip() == target:
+                    return int(entry["slot"])
+        return None
+
     def set_contact(
-        self, slot: int, name: str, number: str, enabled: bool = True
+        self,
+        slot: int,
+        name: str,
+        number: str,
+        enabled: bool = True,
+        telegram_id: str = "",
     ) -> None:
         if not 1 <= slot <= NUM_CONTACTS:
             raise ValueError(f"slot must be 1-{NUM_CONTACTS}, got {slot}")
         with self._lock:
             self._reload_if_changed()
+            # A contact needs a way to reach it, but not necessarily a
+            # Signal number specifically - a Telegram-only contact (see
+            # docs/telegram-migration.md) has a telegram_id and no number
+            # at all, and must stay enabled rather than being silently
+            # disabled the way an accidentally-blank number should be.
+            reachable = bool(number.strip() or telegram_id.strip())
             self._data["contacts"][slot - 1] = {
                 "slot": slot,
                 "name": name.strip(),
                 "number": number.strip(),
-                "enabled": bool(enabled and number.strip()),
+                "telegram_id": telegram_id.strip(),
+                "enabled": bool(enabled and reachable),
             }
             self.save()
 

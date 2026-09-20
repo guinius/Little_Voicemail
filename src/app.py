@@ -17,6 +17,24 @@ Behaviour, in the order a child experiences it:
     messages in flight at once (see _queue_send).
   * A message arriving plays the chosen ringtone and sets that contact's
     lamp flashing until it is heard - here or on a parent's own phone.
+  * Hold a contact button for CALL_HOLD_SECONDS (rather than letting go
+    for a voice note) and the device places a live call to them instead -
+    see docs/telegram-migration.md for why this is Telegram-only, and only
+    when a parent has opted calling in. That contact's lamp blinks slowly
+    while it rings out; press push-to-talk to hang up before it is
+    answered, same as ending a connected call.
+  * An incoming call rings (a looping ringtone) and flashes that contact's
+    lamp quickly until either that same button is pressed (answers - the
+    lamp goes solid) or it goes unanswered for the configured ring
+    timeout (treated as missed, same as it going unheard would be).
+    Every other button is inert for as long as a call is ringing,
+    dialling out, or connected - the same "something important is
+    happening, do not let a stray press derail it" rule already applied
+    to recording/sending/listening - so a wrong contact pressed by
+    accident during a call does nothing rather than dropping it or
+    redirecting it; only push-to-talk ends a call, deliberately the one
+    unambiguous control for that. Calls do not ring in during quiet time;
+    they are declined the same way a press is ignored then.
   * During quiet time none of that happens. Any press flashes all six
     lamps three times and is otherwise ignored; messages still arrive and
     queue up silently, appearing on the buttons once quiet time ends.
@@ -37,6 +55,7 @@ from .hardware import PTT, Action, ButtonEvent, Hardware, blink, solid
 from .messages import MessageQueue
 from .quiet_hours import QuietHours
 from .signal_client import IncomingVoiceMessage, ReadReceipt, SignalClient
+from .telegram_call_client import TelegramCallClient
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +87,20 @@ FACTORY_RESET_FLASH_SECONDS = 3.0
 # to be doing simultaneously.
 MAX_OUTBOX = 5
 
+# How long a contact button has to be held, continuously, before it stops
+# meaning "select this contact" and starts meaning "call this contact" -
+# long enough that reaching for push-to-talk to record a normal voice note
+# (a quick press, then let go) never has a chance of being misread as the
+# start of a call.
+CALL_HOLD_SECONDS = 3.0
+# LED patterns for the three call states, distinct from every other pattern
+# this app uses: dialling out blinks slower than an incoming ring, so the
+# two are told apart at a glance; both are faster than the ~1s pending-
+# message blink so a call reads as more urgent, and neither is the sending
+# blink's period either.
+CALLING_BLINK = blink(period=0.8, duty=0.5)
+RINGING_BLINK = blink(period=0.4, duty=0.5)
+
 
 class State(Enum):
     IDLE = "idle"
@@ -75,6 +108,9 @@ class State(Enum):
     RECORDING = "recording"
     SENDING = "sending"
     PLAYING = "playing"
+    CALLING = "calling"    # dialling out; not yet answered
+    RINGING = "ringing"    # an inbound call, not yet answered
+    IN_CALL = "in_call"    # connected, either direction
 
 
 class PhoneApp:
@@ -85,6 +121,7 @@ class PhoneApp:
         audio: AudioEngine,
         signal: SignalClient,
         queue: MessageQueue,
+        calls: TelegramCallClient | None = None,
         status_path: Path | None = None,
         test_mode_flag_path: Path | None = None,
     ):
@@ -93,6 +130,10 @@ class PhoneApp:
         self.audio = audio
         self.signal = signal
         self.queue = queue
+        # None until a parent opts calling in (see main.py) - every call
+        # code path below checks for that before doing anything, so the
+        # feature is fully inert rather than half-wired when it's off.
+        self.calls = calls
         self.quiet = QuietHours(config)
         self.status_path = status_path
         # Button test mode is toggled by the web UI creating/deleting this
@@ -107,6 +148,12 @@ class PhoneApp:
         self.selected_slot: int | None = None
         self._selection_expires: float = 0.0
         self._recording_slot: int | None = None
+        # The slot a call (dialling out, ringing in, or connected) is with;
+        # meaningful only while self.state is CALLING/RINGING/IN_CALL. See
+        # _begin_outgoing_call / _on_incoming_call / _end_call.
+        self._call_slot: int | None = None
+        self._call_started: float = 0.0
+        self._ring_task: asyncio.Task | None = None
         self._busy = asyncio.Lock()
         self._was_quiet = self.quiet.is_quiet()
         self._tasks: list[asyncio.Task] = []
@@ -138,6 +185,10 @@ class PhoneApp:
 
         signal.on_voice_message = self._on_voice_message
         signal.on_read_receipt = self._on_read_receipt
+        if self.calls is not None:
+            self.calls.on_incoming_call = self._on_incoming_call
+            self.calls.on_call_connected = self._on_call_connected
+            self.calls.on_call_ended = self._on_call_ended_remotely
 
     # -- lifecycle -------------------------------------------------------
 
@@ -153,6 +204,8 @@ class PhoneApp:
                 pass
         self.hw.start()
         self.signal.start()
+        if self.calls is not None:
+            self.calls.start()
         self._refresh_leds()
         await self._play_boot_chime()
         self._tasks = [
@@ -170,8 +223,13 @@ class PhoneApp:
         for task in self._tasks:
             task.cancel()
         self._tasks.clear()
+        if self._ring_task is not None:
+            self._ring_task.cancel()
+            self._ring_task = None
         await self.wait_for_send(timeout=10.0)
         await self.signal.stop()
+        if self.calls is not None:
+            await self.calls.stop()
         await self.hw.stop()
 
     async def _play_boot_chime(self) -> None:
@@ -229,6 +287,8 @@ class PhoneApp:
                 # box has gotten itself into.
                 self._check_factory_reset_combo(now)
                 self._poll_test_mode(now)
+                self._check_call_hold(now)
+                await self._check_call_timeouts(now)
                 if (
                     self.state is State.SELECTED
                     and self._selection_expires
@@ -237,22 +297,33 @@ class PhoneApp:
                     log.info("selection of slot %s lapsed", self.selected_slot)
                     self._clear_selection()
 
-                is_quiet = self.quiet.is_quiet()
-                if is_quiet != self._was_quiet:
-                    self._was_quiet = is_quiet
-                    log.info("quiet time %s", "started" if is_quiet else "ended")
-                    if is_quiet:
-                        # Drop any half-finished interaction.
-                        self._clear_selection()
-                    # Ending quiet time reveals whatever queued up during it
-                    # (requirement 12) - but not over test mode's own LED
-                    # display, which owns the lamps until it exits.
-                    if not self._test_mode:
-                        self._refresh_leds()
+                await self._check_quiet_time_transition()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("tick loop error")
+
+    async def _check_quiet_time_transition(self) -> None:
+        """React to quiet time starting or ending - split out from
+        _tick_loop so a test can call it directly instead of racing the
+        real 0.25s poll (same reason _check_factory_reset_combo etc. are
+        their own methods)."""
+        is_quiet = self.quiet.is_quiet()
+        if is_quiet == self._was_quiet:
+            return
+        self._was_quiet = is_quiet
+        log.info("quiet time %s", "started" if is_quiet else "ended")
+        if is_quiet:
+            # Drop any half-finished interaction - a call in progress
+            # included, same as a selection is.
+            if self.state in (State.CALLING, State.RINGING, State.IN_CALL):
+                await self._end_call(reason="quiet time started")
+            self._clear_selection()
+        # Ending quiet time reveals whatever queued up during it
+        # (requirement 12) - but not over test mode's own LED display,
+        # which owns the lamps until it exits.
+        if not self._test_mode:
+            self._refresh_leds()
 
     # -- factory reset -----------------------------------------------------
 
@@ -380,7 +451,23 @@ class PhoneApp:
             await self._handle_contact_press(event.slot)
 
     async def _handle_contact_press(self, slot: int) -> None:
-        if self.state in (State.RECORDING, State.SENDING, State.PLAYING):
+        if self.state is State.RINGING:
+            if slot == self._call_slot:
+                await self._answer_call()
+            else:
+                # A different button pressed while one is ringing: ignored,
+                # not treated as declining or redirecting the call - see
+                # the module docstring and docs/telegram-migration.md for
+                # why. Only the ringing contact's own button answers.
+                log.debug(
+                    "slot %s pressed while slot %s is ringing; ignoring",
+                    slot, self._call_slot,
+                )
+            return
+        if self.state in (
+            State.RECORDING, State.SENDING, State.PLAYING,
+            State.CALLING, State.IN_CALL,
+        ):
             return
         contact = self.config.contact(slot)
         if contact is None:
@@ -452,6 +539,13 @@ class PhoneApp:
 
     async def _handle_ptt(self, event: ButtonEvent) -> None:
         if event.action is Action.PRESS:
+            if self.state in (State.CALLING, State.RINGING, State.IN_CALL):
+                # The one unambiguous "stop" for every call state - dial-
+                # ling out, ringing in unanswered, or connected - rather
+                # than also overloading the contact button's own press for
+                # some of those (see the module docstring).
+                await self._end_call()
+                return
             await self._start_recording()
         elif event.action is Action.RELEASE:
             await self._finish_recording()
@@ -591,6 +685,193 @@ class PhoneApp:
         self._last_error = message
         self._last_error_at = time.strftime("%Y-%m-%d %H:%M:%S")
 
+    # -- calling -----------------------------------------------------------
+    #
+    # Outgoing: hold a contact button for CALL_HOLD_SECONDS while it is
+    # selected (_check_call_hold, polled from the tick loop the same way
+    # _check_factory_reset_combo already polls held_since() for the reset
+    # combo - a call is a continuous hold, not a single button event, so it
+    # can't be driven off _handle_button the way a press/release can).
+    # Incoming: _on_incoming_call, wired to calls.on_incoming_call in
+    # __init__. Either way, only push-to-talk ends it (_handle_ptt) and any
+    # other contact button is ignored for as long as it lasts
+    # (_handle_contact_press) - see the module docstring for why.
+
+    def _check_call_hold(self, now: float) -> None:
+        if self.calls is None:
+            return
+        if self.state is not State.SELECTED or self.selected_slot is None:
+            return
+        if self.quiet.is_quiet():
+            # Belt and braces: unreachable today (nothing gets selected
+            # during quiet time to begin with - see _handle_button), kept
+            # explicit so a future change to that can't accidentally let a
+            # call ring out or in during quiet time.
+            return
+        started = self.hw.buttons.held_since(self.selected_slot)
+        if started is None or now - started < CALL_HOLD_SECONDS:
+            return
+        contact = self.config.contact(self.selected_slot)
+        if contact is None or not contact.get("telegram_id"):
+            return  # nothing to call - stays selected for a voice note instead
+        self._begin_outgoing_call(self.selected_slot, contact)
+
+    def _begin_outgoing_call(self, slot: int, contact: dict) -> None:
+        # State flips before anything async happens (see _run_outgoing_call)
+        # so this can only ever fire once per hold: the next tick's
+        # _check_call_hold sees state is no longer SELECTED and does
+        # nothing, the same way _queue_send flips state before its send
+        # task starts.
+        self.state = State.CALLING
+        self._call_slot = slot
+        self._call_started = time.monotonic()
+        self._selection_expires = 0.0
+        self.hw.leds.contacts_off()
+        self.hw.leds.set(slot, CALLING_BLINK)
+        log.info("calling slot %s", slot)
+        self._tasks.append(
+            asyncio.create_task(self._run_outgoing_call(slot, contact), name=f"call-slot-{slot}")
+        )
+
+    async def _run_outgoing_call(self, slot: int, contact: dict) -> None:
+        try:
+            assert self.calls is not None
+            await self.calls.call(contact["telegram_id"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.exception("failed to call slot %s", slot)
+            self._record_error(f"call to slot {slot} failed: {type(exc).__name__}: {exc}")
+            if self.state is State.CALLING and self._call_slot == slot:
+                await self._end_call(reason="failed to connect")
+
+    async def _check_call_timeouts(self, now: float) -> None:
+        if self.calls is None:
+            return
+        if self.state is State.RINGING:
+            timeout = float(
+                self.config.get("telegram", "calling", "ring_timeout_seconds", default=30)
+            )
+            if now - self._call_started >= timeout:
+                log.info("call from slot %s went unanswered", self._call_slot)
+                await self._end_call(reason="missed")
+        elif self.state is State.CALLING:
+            timeout = float(
+                self.config.get("telegram", "calling", "dial_timeout_seconds", default=45)
+            )
+            if now - self._call_started >= timeout:
+                log.info("call to slot %s went unanswered", self._call_slot)
+                await self._end_call(reason="no answer")
+
+    async def _on_incoming_call(self, caller_telegram_id: str) -> None:
+        """calls.on_incoming_call - a call is arriving right now."""
+        slot = self.config.slot_for_telegram_id(caller_telegram_id)
+        if slot is None:
+            log.info("call from unknown contact %s; declining", caller_telegram_id)
+            await self._safe_decline()
+            return
+        if self.quiet.is_quiet():
+            # Same rule as a message arriving during quiet time: nothing
+            # rings, nothing lights up. Unlike a message, a call has no
+            # queue to sit in - there's no equivalent of it "appearing on
+            # the button once quiet time ends" for a parent to fall back
+            # on, so this is a real trade-off, not just quiet time applied
+            # mechanically; flagged in docs/telegram-migration.md as worth
+            # a parent confirming rather than assumed obvious.
+            log.info("declining call to slot %s during quiet time", slot)
+            await self._safe_decline()
+            return
+        if self.state is not State.IDLE:
+            log.info("declining call to slot %s; device busy (%s)", slot, self.state.value)
+            await self._safe_decline()
+            return
+
+        self.state = State.RINGING
+        self._call_slot = slot
+        self._call_started = time.monotonic()
+        self.hw.leds.contacts_off()
+        self.hw.leds.set(slot, RINGING_BLINK)
+        log.info("incoming call for slot %s", slot)
+        self._ring_task = asyncio.create_task(self._ring_loop(), name="ring")
+
+    async def _safe_decline(self) -> None:
+        try:
+            assert self.calls is not None
+            await self.calls.decline()
+        except Exception:
+            log.exception("failed to decline incoming call")
+
+    async def _ring_loop(self) -> None:
+        """Loop the ringtone until the call is answered, declined, or times
+        out - play_ringtone() only plays once, unlike a message's chime."""
+        try:
+            while True:
+                await self.audio.play_ringtone()
+                await asyncio.sleep(0.4)  # a small gap, same idea as playback_gap_seconds
+        except asyncio.CancelledError:
+            raise
+
+    async def _on_call_connected(self) -> None:
+        """calls.on_call_connected - the far end picked up (whichever side
+        placed the call)."""
+        if self.state not in (State.CALLING, State.RINGING):
+            return
+        if self._ring_task is not None:
+            self._ring_task.cancel()
+            self._ring_task = None
+        await self.audio.stop_playback()
+        self.state = State.IN_CALL
+        if self._call_slot is not None:
+            self.hw.leds.set(self._call_slot, solid())
+        log.info("call with slot %s connected", self._call_slot)
+
+    async def _answer_call(self) -> None:
+        """The child pressed the ringing contact's own button."""
+        if self._ring_task is not None:
+            self._ring_task.cancel()
+            self._ring_task = None
+        await self.audio.stop_playback()
+        try:
+            assert self.calls is not None
+            await self.calls.answer()
+        except Exception as exc:
+            log.exception("failed to answer call")
+            self._record_error(f"could not answer call: {type(exc).__name__}: {exc}")
+            await self._end_call(reason="answer failed")
+            return
+        self.state = State.IN_CALL
+        if self._call_slot is not None:
+            self.hw.leds.set(self._call_slot, solid())
+        log.info("answered call from slot %s", self._call_slot)
+
+    async def _end_call(self, reason: str = "hung up") -> None:
+        """Ends a call in any of the three call states - dialling out,
+        ringing in, or connected - via push-to-talk, a ring/dial timeout,
+        quiet time starting, or the far end hanging up first
+        (_on_call_ended_remotely). Always safe to call: if there is
+        nothing to hang up, calls.hang_up() is a no-op (see its docstring).
+        """
+        slot = self._call_slot
+        if self._ring_task is not None:
+            self._ring_task.cancel()
+            self._ring_task = None
+        await self.audio.stop_playback()
+        if self.calls is not None:
+            try:
+                await self.calls.hang_up()
+            except Exception:
+                log.exception("hang_up failed")
+        log.info("call with slot %s ended (%s)", slot, reason)
+        self._call_slot = None
+        self.state = State.IDLE
+        self._clear_selection()
+
+    async def _on_call_ended_remotely(self, reason: str) -> None:
+        """calls.on_call_ended - the far end hung up, declined, or the
+        connection dropped, rather than the child ending it here."""
+        if self.state in (State.CALLING, State.RINGING, State.IN_CALL):
+            await self._end_call(reason=reason or "ended by other side")
+
     # -- inbound ---------------------------------------------------------
 
     async def _on_voice_message(self, message: IncomingVoiceMessage) -> None:
@@ -630,6 +911,13 @@ class PhoneApp:
     # -- LEDs ------------------------------------------------------------
 
     def _refresh_leds(self) -> None:
+        if self.state in (State.CALLING, State.RINGING, State.IN_CALL):
+            # A call state owns the lamps directly (_begin_outgoing_call /
+            # _on_incoming_call / _answer_call / _on_call_connected) the
+            # same way button test mode does - apply_contact_states()
+            # would stomp that pattern on the next unrelated refresh
+            # (an incoming message, say) if it ran here too.
+            return
         self.hw.leds.apply_contact_states(
             selected=self.selected_slot,
             pending=self.queue.pending_counts(),
@@ -656,6 +944,7 @@ class PhoneApp:
         return {
             "state": self.state.value,
             "selected_slot": self.selected_slot,
+            "call_slot": self._call_slot,
             "pending": self.queue.pending_counts(),
             "total_pending": self.queue.total_pending(),
             "quiet": active is not None,
@@ -664,6 +953,7 @@ class PhoneApp:
                 self.quiet.quiet_until().isoformat() if active else None
             ),
             "signal_connected": self.signal.connected,
+            "calls_connected": self.calls.connected if self.calls else None,
             "hardware_live": self.hw.live,
             "last_error": self._last_error,
             "last_error_at": self._last_error_at or None,
