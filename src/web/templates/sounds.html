@@ -50,6 +50,16 @@
     <button type="button" id="upload-sound">Upload</button>
   </div>
   <p class="hint" id="upload-status" hidden></p>
+
+  <ul class="sound-list" id="sound-list">
+    {% for name in ringtones %}
+      <li data-name="{{ name }}">
+        <span>{{ name }}</span>
+        <button type="button" class="sound-delete" title="Delete {{ name }}" aria-label="Delete {{ name }}">&times;</button>
+      </li>
+    {% endfor %}
+  </ul>
+  <p class="hint" id="delete-status" hidden></p>
 </div>
 {% endblock %}
 
@@ -98,6 +108,74 @@
   const uploadBtn = document.getElementById('upload-sound');
   const uploadStatus = document.getElementById('upload-status');
   const ringtoneSelect = document.getElementById('ringtone');
+  const soundList = document.getElementById('sound-list');
+
+  function renderSoundList(names) {
+    if (!soundList) return;
+    soundList.innerHTML = '';
+    for (const name of names) {
+      const li = document.createElement('li');
+      li.dataset.name = name;
+      const label = document.createElement('span');
+      label.textContent = name;
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'sound-delete';
+      del.title = 'Delete ' + name;
+      del.setAttribute('aria-label', 'Delete ' + name);
+      del.textContent = '×';
+      li.append(label, del);
+      soundList.appendChild(li);
+    }
+  }
+
+  function rebuildRingtoneSelect(names, current) {
+    if (!ringtoneSelect) {
+      if (names.length) location.reload();
+      return;
+    }
+    ringtoneSelect.innerHTML = '';
+    for (const name of names) {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      ringtoneSelect.appendChild(option);
+    }
+    if (current) ringtoneSelect.value = current;
+  }
+
+  if (soundList) {
+    soundList.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.sound-delete');
+      if (!btn) return;
+      const li = btn.closest('li');
+      const name = li.dataset.name;
+      if (!confirm('Delete "' + name + '"? This cannot be undone.')) return;
+      btn.disabled = true;
+      const deleteStatus = document.getElementById('delete-status');
+      deleteStatus.hidden = false;
+      deleteStatus.textContent = 'Deleting...';
+      try {
+        const res = await fetch('{{ url_for("delete_sound") }}', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({name}),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          deleteStatus.textContent = body.error || 'Could not delete that file.';
+          btn.disabled = false;
+          return;
+        }
+        deleteStatus.textContent = '"' + name + '" was deleted.';
+        renderSoundList(body.ringtones);
+        rebuildRingtoneSelect(body.ringtones, body.current);
+      } catch (err) {
+        deleteStatus.textContent = 'Could not delete: ' + err;
+        btn.disabled = false;
+      }
+    });
+  }
 
   if (uploadBtn) {
     uploadBtn.addEventListener('click', async () => {
@@ -124,21 +202,15 @@
         }
         uploadStatus.textContent = '"' + body.name + '" was added below.';
         fileInput.value = '';
+        // Rebuild the dropdown and delete list from the server's own list
+        // rather than just appending the one new name, so a page left open
+        // across an upload from another tab/device still ends up with the
+        // right set. No ringtone selector means the folder was previously
+        // empty - reload so the whole card appears.
         if (ringtoneSelect) {
-          // Rebuild the dropdown from the server's own list rather than just
-          // appending the one new name, so a page left open across an
-          // upload from another tab/device still ends up with the right set.
-          ringtoneSelect.innerHTML = '';
-          for (const name of body.ringtones) {
-            const option = document.createElement('option');
-            option.value = name;
-            option.textContent = name;
-            ringtoneSelect.appendChild(option);
-          }
-          ringtoneSelect.value = body.name;
+          rebuildRingtoneSelect(body.ringtones, body.name);
+          renderSoundList(body.ringtones);
         } else {
-          // No ringtone selector was rendered because the folder was
-          // previously empty - reload so the whole card appears.
           location.reload();
         }
       } catch (err) {

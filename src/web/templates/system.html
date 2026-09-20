@@ -224,6 +224,29 @@
 
 <div id="advanced-section" hidden>
   <div class="card">
+    <h2>Update channel</h2>
+    <p class="hint">
+      Which branch this device checks and installs updates from. Leave this
+      on <strong>master</strong> for any device a child actually uses.
+      Switch it to <strong>dev</strong> only on a box you are testing
+      changes on, so that testing never reaches the kids' device.
+    </p>
+    <form method="post" action="{{ url_for('system') }}">
+      <label for="update-branch">Branch</label>
+      <select id="update-branch" name="update_branch">
+        {% for channel in update_channels %}
+          <option value="{{ channel }}" {% if channel == update_branch %}selected{% endif %}>
+            {{ channel }}{{ " (stable)" if channel == "master" else " (testing)" }}
+          </option>
+        {% endfor %}
+      </select>
+      <div class="actions">
+        <button type="submit">Save channel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
     <h2>Audio &amp; tools</h2>
     <p class="hint">
       Read-only checks - nothing here opens a device or changes anything, so it's
