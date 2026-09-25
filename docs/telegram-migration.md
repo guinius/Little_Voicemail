@@ -250,7 +250,45 @@ of each existing exclusion, the same way `HARDWARE.md` does.
 |---|---|---|
 | Pico / Pico 2 W | ❌ Not a Linux computer at all | ❌ **Unchanged** - this was never about signal-cli; no Linux, no filesystem, no Flask/TLS regardless of messaging backend |
 | Pi Zero v1.3 (no wireless) | ❌ Two blockers | ❌ **Still excluded** - no WiFi at all is a hardware fact, not a software one |
-| **Pi Zero W** (1st gen, *with* wireless) | ❌ Excluded solely because ARMv6 can't run signal-cli's JVM ("Server VM is only supported on ARMv7+ VFP") | ✅ **Plausibly opens up** - that blocker is JVM-specific; Telegram's Bot API is plain HTTPS through Flask, no JVM or native libsignal involved. Untested; likely light enough given the JVM was the only thing needing the memory/heap tuning this project already does for the Zero 2 W. |
+| **Pi Zero W** (1st gen, *with* wireless) | ❌ Excluded solely because ARMv6 can't run signal-cli's JVM ("Server VM is only supported on ARMv7+ VFP") | ✅ **Opens up, with one specific risk to verify - see below.** That blocker is JVM-specific; Telegram's Bot API is plain HTTPS through Flask, no JVM or native libsignal involved. |
+
+### Firmed up: does `pip install -r requirements.txt` actually work on armv6l?
+
+Checked rather than assumed, since this is the one place a wheel-availability
+gap could silently turn "opens up" back into "doesn't work":
+
+- **`cryptography` has no PyPI wheel for any 32-bit ARM platform** -
+  confirmed directly against a recent release's file listing: wheels exist
+  for `aarch64`/`x86_64`/macOS/Windows only. On stock PyPI that would mean
+  building from source (Rust + OpenSSL headers) on install - slow and
+  RAM-risky on a single ARM11 core with 512 MB.
+- **That's not what actually happens on this board, though.** Raspberry Pi
+  OS ships `/etc/pip.conf` pointing pip at
+  [piwheels.org](https://www.piwheels.org) by default - a project that
+  builds and hosts prebuilt wheels specifically for Pi hardware, including
+  `cryptography` for armv6l. `install.sh`'s `pip install -r requirements.txt`
+  has no `--index-url` override, so it already inherits this and should
+  pull a prebuilt wheel with no script changes needed.
+- **The genuine remaining risk**: piwheels doesn't always build natively for
+  armv6l - for many packages (cryptography's build history among them) it
+  builds once on armv7 hardware and relabels the wheel for armv6l "with a
+  few exceptions" where that doesn't hold. This isn't hypothetical for this
+  exact package: `cryptography` 36.0.1 shipped an armv6l wheel that crashed
+  with `Illegal Instruction` specifically on Pi Zero hardware, fixed by
+  pinning back a patch version. So: generally works, has broken before for
+  exactly this reason on exactly this chip - whatever version actually gets
+  pinned needs a smoke test on real armv6l hardware before shipping, not
+  assumed safe because a wheel exists.
+- **Everything else in `requirements.txt`** (Flask, Werkzeug, cheroot,
+  smbus2, segno) is pure Python with no compiled extensions - confirmed no
+  architecture risk there.
+- **Forward-looking, for the not-yet-built Telegram messaging client**:
+  avoid a bot framework that pulls in `aiohttp` (its speedups are a C
+  extension - a fresh instance of the same risk class) and hand-roll the
+  Bot API calls on stdlib `urllib`/`http.client` instead, the same way
+  `signal_client.py` already hand-rolls its own transport rather than
+  depending on a library. Avoids reintroducing this exact question for a
+  dependency that isn't even needed yet.
 
 **Calling does not follow the same logic and likely still needs arm64.**
 `pytgcalls`/`tgcalls` is a native C++ extension doing continuous real-time
