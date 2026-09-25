@@ -238,6 +238,32 @@ already dropped when quiet time begins.
 ```
 Each contact also gains `"telegram_id": ""`.
 
+## Hardware implications
+
+Dropping signal-cli (and with it, the JVM/libsignal requirement `HARDWARE.md`
+"Choosing a board" documents as the hard floor) changes what's viable for
+**messaging** - not for calling, which has its own, separate native-library
+story. Not yet tested on real hardware; reasoning from the documented cause
+of each existing exclusion, the same way `HARDWARE.md` does.
+
+| Board | Today (Signal) | With Telegram messaging |
+|---|---|---|
+| Pico / Pico 2 W | ❌ Not a Linux computer at all | ❌ **Unchanged** - this was never about signal-cli; no Linux, no filesystem, no Flask/TLS regardless of messaging backend |
+| Pi Zero v1.3 (no wireless) | ❌ Two blockers | ❌ **Still excluded** - no WiFi at all is a hardware fact, not a software one |
+| **Pi Zero W** (1st gen, *with* wireless) | ❌ Excluded solely because ARMv6 can't run signal-cli's JVM ("Server VM is only supported on ARMv7+ VFP") | ✅ **Plausibly opens up** - that blocker is JVM-specific; Telegram's Bot API is plain HTTPS through Flask, no JVM or native libsignal involved. Untested; likely light enough given the JVM was the only thing needing the memory/heap tuning this project already does for the Zero 2 W. |
+
+**Calling does not follow the same logic and likely still needs arm64.**
+`pytgcalls`/`tgcalls` is a native C++ extension doing continuous real-time
+audio (jitter buffer, opus, echo cancellation) - a much heavier load than
+messaging's record-then-batch-encode, and this project has already hit
+exactly this wall once before: libsignal's native library is only built
+for arm64 (see git history, "Supply libsignal's native library for
+arm64"). Whether pytgcalls ships an ARMv6 binary at all, and whether a
+single ARM11 core could run real-time audio if it did, are both open and
+probably-negative questions. Net: a messaging-only build could plausibly
+target a Pi Zero W (1st gen); a build with calling turned on should still
+assume arm64 (Zero 2 W or better), same as today.
+
 ## Open questions / follow-up work
 
 1. **Read receipts (parity row 3).** Telegram's Bot API has nothing
