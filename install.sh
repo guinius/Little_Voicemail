@@ -428,6 +428,15 @@ if [[ -d /etc/NetworkManager ]]; then
     install -d -m 0755 /etc/NetworkManager/dnsmasq-shared.d
     install -m 0644 "$INSTALL_DIR/tools/image/lv-portal-dnsmasq.conf" \
         /etc/NetworkManager/dnsmasq-shared.d/lv-portal.conf
+    # The Pi's WiFi chip dozes between beacons by default. On a box that
+    # sits idle for hours that makes it drop off the LAN for a while - the
+    # parent UI times out on both the .local name and the bare address
+    # until something wakes the radio. 2 = powersave disabled.
+    install -d -m 0755 /etc/NetworkManager/conf.d
+    cat > /etc/NetworkManager/conf.d/lv-wifi-powersave.conf <<'EOF'
+[connection]
+wifi.powersave = 2
+EOF
 fi
 ok "lv-netctl installed"
 
