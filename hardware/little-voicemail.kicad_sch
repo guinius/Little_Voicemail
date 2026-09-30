@@ -3,11 +3,11 @@
   (paper "A3")
   (title_block
     (title "Little Voicemail - audio + button/lamp HAT")
-    (date "2026-09-11")
-    (rev "B")
+    (date "2026-09-30")
+    (rev "C")
     (comment 1 "Six contact buttons + push-to-talk on one MCP23017 at 0x20")
-    (comment 2 "MAX98357A (I2S amp) drives the speaker; 2x ICS-43434 breakouts")
-    (comment 3 "give far-field mic input, TDM-shared on one I2S capture line")
+    (comment 2 "MAX98357A (I2S amp) drives the speaker via J11 (JST-PH B2B-PH-K-S)")
+    (comment 3 "ICS-43434 breakout (J9) gives far-field mic input over I2S")
     (comment 4 "Lamps are ACTIVE LOW: anode to +5V via R, cathode to GPBn")
   )
   (lib_symbols
@@ -437,7 +437,7 @@
       (in_bom yes) (on_board yes)
       (property "Reference" "J" (at -5.08 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "Speaker" (at 0 3.81 0) (effects (font (size 1.27 1.27))))
-      (property "Footprint" "Connector_JST:JST_PH_S2B-PH-K_1x02_P2.00mm_Vertical" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Footprint" "Connector_JST:JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
       (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
       (symbol "Speaker_Conn_2_0_1"
         (rectangle (start -3.81 2.54) (end 3.81 -2.54)
@@ -1353,7 +1353,7 @@
     (uuid "a5000000-0000-4000-8000-000000000001")
     (property "Reference" "J11" (at 520.0 82.0 0) (effects (font (size 1.27 1.27))))
     (property "Value" "Speaker" (at 520.0 85.0 0) (effects (font (size 1.27 1.27))))
-    (property "Footprint" "Connector_JST:JST_PH_S2B-PH-K_1x02_P2.00mm_Vertical" (at 520.0 90.0 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Footprint" "Connector_JST:JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical" (at 520.0 90.0 0) (effects (font (size 1.27 1.27)) hide))
     (pin "1" (uuid "a5000000-0000-4000-8000-000000000002"))
     (pin "2" (uuid "a5000000-0000-4000-8000-000000000003"))
     (instances (project "little-voicemail"

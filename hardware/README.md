@@ -5,10 +5,12 @@ button/lamp board. Open `little-voicemail.kicad_pro` in KiCad 7 or newer.
 
 It does two jobs on one board:
 
-1. **Audio.** A MAX98357A I2S Class-D amplifier drives the speaker, and two
-   ICS-43434 I2S MEMS microphone breakouts (wired in over headers, not bare
-   parts — see [HARDWARE.md](../HARDWARE.md#why-digital-i2s-not-a-bigger-analog-amp-bolted-onto-the-same-codec))
-   give far-field pickup, all over the Pi's I2S bus.
+1. **Audio.** A MAX98357A I2S Class-D amplifier drives the speaker, and an
+   ICS-43434 I2S MEMS microphone breakout (wired in over a header, not a bare
+   part — see [HARDWARE.md](../HARDWARE.md#why-digital-i2s-not-a-bigger-analog-amp-bolted-onto-the-same-codec))
+   gives far-field pickup, all over the Pi's I2S bus. A second mic
+   (stereo/beamforming) is a small schematic addition later if wanted — see
+   below — not carried on this board today.
 2. **Buttons and lamps.** Six contact buttons and the push-to-talk button —
    switch and lamp for each — onto a single MCP23017 at address `0x20`, on
    the Pi's I2C bus.
@@ -28,8 +30,8 @@ this revision replaced the earlier ReSpeaker-HAT-plus-button-board stack.
 | C3 | 10 µF | 0805 ceramic or small tantalum | U2 supply bulk decoupling |
 | R1–R7 | 220 Ω | `R_Axial_DIN0207` | One per lamp, sets LED current |
 | J2–J8 | 4-way JST-XH | `JST_XH_B4B-XH-A_1x04_P2.50mm_Vertical` | One per button |
-| J9, J10 | 1x6 2.54 mm pin socket | `PinSocket_1x06_P2.54mm_Vertical` | One per ICS-43434 breakout (left / right) |
-| J11 | 2-way JST-PH 2.0 | `JST_PH_S2B-PH-K_1x02_P2.00mm_Vertical` | Speaker |
+| J9 | 1x6 2.54 mm pin socket | `PinSocket_1x06_P2.54mm_Vertical` | ICS-43434 breakout |
+| J11 | 2-way JST-PH 2.0, vertical | `JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical` | Speaker — mates with the Adafruit Mono Enclosed Speaker's pre-attached JST-PH lead |
 
 The symbols are defined inside the schematic file itself, so it opens without
 needing any library set up beyond what ships with KiCad.
@@ -38,17 +40,15 @@ needing any library set up beyond what ships with KiCad.
 
 | Net | Connections |
 |-----|-------------|
-| `+3V3` | J1.1, J1.17, U1.9 (VDD), U1.18 (RESET), C1.1, J9.1, J10.1 |
+| `+3V3` | J1.1, J1.17, U1.9 (VDD), U1.18 (RESET), C1.1, J9.1 |
 | `+5V` | J1.2, J1.4, R1–R7 (top), U2.7/8 (VDD), C2.1, C3.1 |
-| `GND` | J1.6/9/14/20/25/30/34/39, U1.10 (VSS), U1.15–17 (A0/A1/A2), C1.2, C2.2, C3.2, U2.3/11/15/17(pad), J2–J8 pin 2, J9.2, J10.2, J9.6 (L select), J11 return |
+| `GND` | J1.6/9/14/20/25/30/34/39, U1.10 (VSS), U1.15–17 (A0/A1/A2), C1.2, C2.2, C3.2, U2.3/11/15/17(pad), J2–J8 pin 2, J9.2, J9.6 (SEL, left slot) |
 | `SDA` | J1.3 (GPIO2), U1.13 |
 | `SCL` | J1.5 (GPIO3), U1.12 |
-| `BCLK` | J1.12 (GPIO18), U2.16, J9.3, J10.3 |
-| `LRCLK` | J1.35 (GPIO19), U2.14, J9.4, J10.4 |
+| `BCLK` | J1.12 (GPIO18), U2.16, J9.3 |
+| `LRCLK` | J1.35 (GPIO19), U2.14, J9.4 |
 | `I2S_DOUT` | J1.40 (GPIO21), U2.1 (DIN) |
-| `I2S_DIN` | J1.38 (GPIO20), J9.5, J10.5 (both mics' SD, shared) |
-| `MIC_SEL_L` | J9.6 → GND (left slot) |
-| `MIC_SEL_R` | J10.6 → +3V3 (right slot) |
+| `I2S_DIN` | J1.38 (GPIO20), J9.5 |
 | `SPK+` / `SPK-` | U2.9 (OUTP) / U2.10 (OUTN) → J11 |
 | `BTN_1`…`BTN_6` | U1.21–26 (GPA0–GPA5) → J2–J7 pin 1 |
 | `BTN_PTT` | U1.27 (GPA6) → J8 pin 1 |
@@ -68,17 +68,17 @@ needing any library set up beyond what ships with KiCad.
 Same pinout on all seven, so the looms are interchangeable. J8 is the
 push-to-talk button.
 
-### Mic connector pinout (J9, J10)
+### Mic connector pinout (J9)
 
 Matches the Adafruit ICS-43434 breakout's own header order:
 
 ```
   1  3V/VIN  +3V3
   2  GND     GND
-  3  SCK     BCLK, shared with the other mic and with U2
-  4  WS      LRCLK, shared with the other mic and with U2
-  5  SD      shared data line, both mics answer in different TDM slots
-  6  SEL     L/R select: GND on J9 (left mic), +3V3 on J10 (right mic)
+  3  SCK     BCLK, shared with U2
+  4  WS      LRCLK, shared with U2
+  5  SD      shared data line — a second mic added later shares this too
+  6  SEL     L/R select: GND here (left slot); a second mic would tie +3V3
 ```
 
 ## Three things to get right
@@ -201,7 +201,7 @@ run it before fab rather than trusting the SDA/SCL/3V3 nets as drawn.
 
 After that, placement is a judgement call with one rule worth following
 before you route: **keep U2 (MAX98357A) and its speaker traces away from J9
-and J10 (the mic connectors) and their traces.** A switching Class-D amp's
-edges are exactly the kind of noise a sensitive far-field mic picks up if
-routed alongside it — physical separation, not just a shared ground plane.
-Route, then run DRC before ordering.
+(the mic connector) and its traces.** A switching Class-D amp's edges are
+exactly the kind of noise a sensitive far-field mic picks up if routed
+alongside it — physical separation, not just a shared ground plane. Route,
+then run DRC before ordering.

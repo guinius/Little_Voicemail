@@ -123,11 +123,14 @@ This design goes further and drops the analog codec entirely, in favour of:
 - **[MAX98357A](https://www.digikey.com/en/products/detail/analog-devices-inc-maxim-integrated/MAX98357AETE-T/4936122)** —
   I2S-in, Class-D amplifier **and** DAC in one chip. 3.2 W into 4 Ω at 5 V
   (10% THD). No analog output stage to design.
-- **2x [ICS-43434](https://www.mouser.com/ProductDetail/Adafruit/6049)**
-  I2S digital MEMS microphones (as the Adafruit breakout module, not a bare
+- **[ICS-43434](https://www.mouser.com/ProductDetail/Adafruit/6049)**
+  I2S digital MEMS microphone (as the Adafruit breakout module, not a bare
   die on this board — see the note below on why). 65 dBA SNR, ±1 dB
-  sensitivity matching between units, so a stereo pair needs no per-unit
-  calibration.
+  sensitivity tolerance, factory-trimmed so it needs no per-unit
+  calibration. This board carries one (J9); the connector and TDM slot
+  select (SEL) support adding a second for stereo/beamforming later without
+  a board respin — see [Microphone](#ics-43434-mic-breakout--microphone)
+  below.
 
 Reasoning:
 
@@ -239,7 +242,7 @@ produce, so it is not the recommended path.
 
 ```
 Pi I2S TX (GPIO21) ──▶ MAX98357A ──▶ speaker (3.2 W @ 4 Ω)
-Pi I2S RX (GPIO20) ◀── ICS-43434 x2 (TDM, shared BCLK/WS/SD)
+Pi I2S RX (GPIO20) ◀── ICS-43434 (space for a second, TDM-shared, later)
 Pi I2C1 (GPIO2/3)  ◀▶ MCP23017 (buttons/lamps, address 0x20)
 ```
 
@@ -270,43 +273,44 @@ Decoupling: 100 nF ceramic close to pins 7/8, plus a 10 µF bulk capacitor on
 the same rail — standard practice for a Class-D amp's supply pins, damps the
 switching-current transients the linear regulator alone won't.
 
-A future hardware-mute feature is easy to add later without a respin: SD_MODE
+A future hardware-mute feature is a small change, not a rethink: SD_MODE
 could instead be driven from the MCP23017's spare **GPB7** pin (documented as
 unused in `hardware/README.md`) instead of tied straight to 3V3, giving the
-firmware a real hardware mute alongside the lamps it already drives. Not done
-in this revision, to keep the first board's bring-up simple — noted here so
-it isn't forgotten.
+firmware a real hardware mute alongside the lamps it already drives. That
+does mean an actual schematic edit and a new trace between U1 and U2 when you
+get there, not a zero-cost option today — just cheap enough to defer. Not
+done in this revision, to keep the first board's bring-up simple.
 
-### ICS-43434 x2 (mic breakouts) — microphones
+### ICS-43434 (mic breakout) — microphone
 
 Wired as **Adafruit's I2S MEMS Microphone Breakout ([#6049](https://www.mouser.com/ProductDetail/Adafruit/6049))**,
 not a bare part on this board (see [above](#why-digital-i2s-not-a-bigger-analog-amp-bolted-onto-the-same-codec)
-for why). Each breakout carries its own decoupling; only these six signals
-per unit reach this board via a 1x6 2.54 mm pin header:
+for why). The breakout carries its own decoupling; only these six signals
+reach this board via a 1x6 2.54 mm pin header (J9):
 
-| Breakout pin | Left mic (J9) | Right mic (J10) |
-|--------------|----------------|-------------------|
-| 3V / VIN | +3V3 | +3V3 |
-| GND | GND | GND |
-| SCK | Pi GPIO18 (shared) | Pi GPIO18 (shared) |
-| WS | Pi GPIO19 (shared) | Pi GPIO19 (shared) |
-| SD | Pi GPIO20 (shared) | Pi GPIO20 (shared) |
-| SEL (L/R) | GND (left slot) | +3V3 (right slot) |
+| Breakout pin | J9 |
+|--------------|----|
+| 3V / VIN | +3V3 |
+| GND | GND |
+| SCK | Pi GPIO18 |
+| WS | Pi GPIO19 |
+| SD | Pi GPIO20 |
+| SEL (L/R) | GND (left slot) |
 
-Both mics share one data line (Pi GPIO20) via I2S's time-division stereo
-slots — tying one breakout's SEL low and the other's high is what makes them
-answer in different slots on the same wire, exactly the trick the
+This board carries one mic. SEL tied to GND puts it in the left TDM slot on
+the shared data line — if you ever add a second breakout for a stereo pair
+(better directional information for far-field pickup, the same trick the
 [ICS-43434 reference design](https://quickboards.org/documentation/ics-43434-i2s-microphone-reference-design/)
-uses for a stereo pair. Far-field pickup gets a small win from this too: two
-independently-placed mics feeding two channels is more directional
-information than the same two mics summed to mono would give the software.
+uses), it shares BCLK/WS/SD with this one and only needs its own SEL tied to
++3V3 instead to answer in the other slot — no other change to this board's
+wiring.
 
 ### Power budget
 
 | Load | Peak | Typical |
 |------|-----:|--------:|
 | MAX98357A into 4 Ω speaker | 3.2 W (~640 mA @ 5V, Class-D so real draw is lower) | well under during speech, which isn't a continuous tone |
-| 2x ICS-43434 | ~3 mA total | negligible |
+| ICS-43434 | ~1.5 mA | negligible |
 | MCP23017 + 7 lamps | 95 mA | as before |
 | Pi 4 itself | up to ~1.2 A | — |
 
@@ -322,8 +326,9 @@ changes the "use the official supply" advice in [Power](#power) below.
 | 1 | Official Pi USB-C PSU, 3 A | 8 | [The Pi Hut](https://thepihut.com/) — do not skimp, the amp draws real current |
 | 1 | MCP23017-E/SP, DIP-28 | 3 | [Digi-Key](https://www.digikey.in/en/products/detail/microchip-technology/MCP23017-E-SP/MCP23017-E-SP-ND/894272) / [Mouser](https://www.mouser.com/ProductDetail/Microchip-Technology/MCP23017-E-SP) |
 | 1 | **MAX98357AETE+T**, TQFN-16 3x3mm, I2S Class-D amp | 3 | [Digi-Key MAX98357AETE-T](https://www.digikey.com/en/products/detail/analog-devices-inc-maxim-integrated/MAX98357AETE-T/4936122) |
-| 2 | **Adafruit I2S MEMS Microphone Breakout — ICS-43434** (#6049) | 6 each | [Mouser #6049](https://www.mouser.com/ProductDetail/Adafruit/6049) / [The Pi Hut](https://thepihut.com/products/adafruit-i2s-mems-microphone-breakout-ics-43434) |
-| 1 | **RS PRO Miniature Speaker, 4 Ω, 3 W, 40 mm dia.** | 3 | [RS 0102760](https://uk.rs-online.com/web/p/miniature-speakers/0102760) — SPL ≥85 dB, 0 Hz–20 kHz |
+| 1 | **Adafruit I2S MEMS Microphone Breakout — ICS-43434** (#6049) | 6 | [Mouser #6049](https://www.mouser.com/ProductDetail/Adafruit/6049) / [The Pi Hut](https://thepihut.com/products/adafruit-i2s-mems-microphone-breakout-ics-43434) |
+| 1 | **Adafruit Mono Enclosed Speaker, 3 W, 4 Ω** (Adafruit #3351) | 3.40 | [The Pi Hut](https://thepihut.com/products/mono-enclosed-speaker-3w-4-ohm) — enclosed housing, 150 mm pre-attached JST-PH 2-pin cable, plugs straight into J11 |
+| 1 | JST PH 2-pin receptacle, vertical, **B2B-PH-K-S** | 0.12 | [Mouser](https://www.mouser.com/ProductDetail/JST-Commercial/B2B-PH-K-SLFSN) — mates with the speaker's cable, footprint on J11 |
 | 6 | 30 mm illuminated button, **bare LED** | 12 | Arcade World UK, Pimoroni, The Pi Hut, or AliExpress in bulk |
 | 1 | 60 mm illuminated button, **bare LED** | 5 | as above — the push-to-talk button, make it obviously the big one |
 | 7 | 220 Ω resistor, 0.25 W | 1 | any distributor — sets lamp current, see [Lamps](hardware/README.md#resistor-sizing) |
@@ -333,7 +338,7 @@ changes the "use the official supply" advice in [Power](#power) below.
 | 1 | PCB (this design) | ~10 for a small-batch run | schematic is in `hardware/little-voicemail.kicad_sch`; layout still needs doing in KiCad, see `hardware/README.md` |
 | 1 | 40-pin GPIO stacking header | 3 | The Pi Hut / Rapid |
 | 7 | 4-way JST-XH connector + crimps | 4 | one per button: switch pair + lamp pair |
-| 2 | 1x6 2.54 mm pin header (socket) | 1 | one per mic breakout |
+| 1 | 1x6 2.54 mm pin header (socket) | 1 | J9, for the mic breakout |
 | — | Hook-up wire, 2.8 mm spade connectors | 5 | if your buttons take spades rather than solder lugs |
 | 1 | Enclosure | 10–25 | laser-cut ply or a project box; see [Enclosure](#enclosure) |
 
@@ -460,19 +465,22 @@ is safe for every colour.
 
 | Signal | Pi header pin | Connects to |
 |--------|---------------|-------------|
-| BCLK | GPIO18 (physical pin 12) | MAX98357A pin 16, both mic breakouts' SCK |
-| LRCLK | GPIO19 (physical pin 35) | MAX98357A pin 14, both mic breakouts' WS |
+| BCLK | GPIO18 (physical pin 12) | MAX98357A pin 16, mic breakout's SCK |
+| LRCLK | GPIO19 (physical pin 35) | MAX98357A pin 14, mic breakout's WS |
 | I2S DOUT (Pi transmits) | GPIO21 (physical pin 40) | MAX98357A pin 1 (DIN) |
-| I2S DIN (Pi receives) | GPIO20 (physical pin 38) | both mic breakouts' SD, tied together |
+| I2S DIN (Pi receives) | GPIO20 (physical pin 38) | mic breakout's SD |
 
 ### Speaker
 
 Driven directly by the MAX98357A's OUTP/OUTN — a filterless Class-D output,
-no external LC filter required for this application. Solder to a 2-pin
-JST-PH 2.0 or bare leads into the RS PRO 40 mm speaker above. It gives up to
-3.2 W into 4 Ω — noticeably louder than the 1 W the previous ReSpeaker-based
-design could deliver into the same speaker, because the amp is finally sized
-to what the speaker was always rated for.
+no external LC filter required for this application. J11 is a vertical JST
+PH 2-pin receptacle (**B2B-PH-K-S**, ~$0.12) that mates directly with the
+Adafruit Mono Enclosed Speaker's pre-attached cable from the BOM — no
+soldering to the speaker itself. It gives up to 3.2 W into 4 Ω — noticeably
+louder than the 1 W the previous ReSpeaker-based design could deliver into
+a similarly-rated speaker, because the amp is finally sized to what a 3 W
+speaker can actually take, and the enclosed housing avoids the thin,
+front/back-cancelling sound of a bare driver rattling in a cutout.
 
 ### Schematic
 
@@ -491,7 +499,7 @@ The amp dominates here, same as before: seven lamps at 220 Ω add at most
 a software bug — check the supply first.
 
 The lamps run off the header's **+5 V**, not 3V3, so they do not load the
-Pi's 3.3 V regulator. The MCP23017 and both mic breakouts sit on 3V3, at well
+Pi's 3.3 V regulator. The MCP23017 and the mic breakout sit on 3V3, at well
 under a milliamp combined; the amp is the only new load of consequence on 5V.
 
 ## Enclosure
@@ -502,10 +510,10 @@ unmistakable by feel. Six in two rows of three suits a small child better
 than nine did: the same panel area gives more room around each target, and
 there is less to scan.
 
-Leave mic openings clear over both ICS-43434 breakouts — place them near
-opposite edges of the enclosure, the same far-field logic as the old
-ReSpeaker's two-mic placement. Drill 3–4 mm holes directly over each mic's
-port.
+Leave a mic opening clear over the ICS-43434 breakout, and drill a 3–4 mm
+hole directly over its port. If you add the second mic mentioned above, give
+it its own opening near the opposite edge of the enclosure, the same
+far-field logic as the old ReSpeaker's two-mic placement.
 
 Angle the top face back about 15°, so a child looking down at it sees the
 labels straight on.
